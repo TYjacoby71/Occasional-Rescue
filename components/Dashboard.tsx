@@ -1,14 +1,15 @@
 "use client";
 
 import { C, display } from "@/lib/theme";
-import { OCCASIONS, type OccasionTile } from "@/lib/occasions";
+import { type OccasionTile } from "@/lib/occasions";
 import { Flame } from "@/components/Flame";
 
-// Ported from the prototype's <Dashboard/>. Phase 0: renders the carousel from the static
-// occasion mirror and proves the skeleton deploys. Phase 2 wires real intake on tile tap.
-export function Dashboard({ onPick }: { onPick: (o: OccasionTile) => void }) {
-  const featured = OCCASIONS[0];
-  const rest = OCCASIONS.slice(1);
+// Ported from the prototype's <Dashboard/>. Renders the carousel from the live occasion_config
+// rows passed down from the server. The first (lowest display_order) tile is featured.
+export function Dashboard({ occasions, onPick }: { occasions: OccasionTile[]; onPick: (o: OccasionTile) => void }) {
+  const featured = occasions[0];
+  const rest = occasions.slice(1);
+  if (!featured) return null;
 
   return (
     <div style={{ padding: "26px 22px 40px" }}>
@@ -44,9 +45,9 @@ export function Dashboard({ onPick }: { onPick: (o: OccasionTile) => void }) {
           letterSpacing: ".12em", textTransform: "uppercase", color: C.ink, background: C.gold,
           padding: "5px 10px", borderRadius: 999,
         }}>
-          <span style={{ width: 5, height: 5, borderRadius: 999, background: C.ink }} />Soonest
+          <span style={{ width: 5, height: 5, borderRadius: 999, background: C.ink }} />{featured.date}
         </span>
-        <h2 style={{ fontFamily: display, fontWeight: 500, fontSize: 30, margin: "14px 0 4px" }}>Anniversary</h2>
+        <h2 style={{ fontFamily: display, fontWeight: 500, fontSize: 30, margin: "14px 0 4px" }}>{featured.label}</h2>
         <p style={{ margin: 0, color: C.muted, fontSize: 14.5 }}>
           Last-minute? Start here. A keepsake they&apos;ll actually keep.
         </p>

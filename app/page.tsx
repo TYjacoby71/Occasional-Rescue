@@ -1,33 +1,13 @@
-"use client";
+import { listOccasions } from "@/lib/modules/occasion";
+import { Home } from "@/components/Home";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { C, ui } from "@/lib/theme";
-import { Dashboard } from "@/components/Dashboard";
-import { GiftSheet } from "@/components/GiftSheet";
-import type { OccasionTile } from "@/lib/occasions";
+// Revalidate the carousel periodically so occasion_config edits (activating a new occasion)
+// surface without a redeploy.
+export const revalidate = 300;
 
-// Dashboard home. Active tiles route into the rescue flow; inactive ones open the
-// "coming soon" sheet. (Phase 2 wires the live occasion_config read + day-of preselect.)
-export default function Page() {
-  const router = useRouter();
-  const [sheet, setSheet] = useState<OccasionTile | null>(null);
-
-  function onPick(o: OccasionTile) {
-    if (o.active) router.push(`/${o.key}`);
-    else setSheet(o);
-  }
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#0E0C16", display: "flex", justifyContent: "center", fontFamily: ui }}>
-      <div style={{
-        width: "100%", maxWidth: 430, minHeight: "100vh", position: "relative", overflow: "hidden",
-        background: `radial-gradient(120% 60% at 50% -10%, #2A2238 0%, ${C.ink} 46%, #110E1A 100%)`,
-        color: C.ivory, boxShadow: "0 0 80px rgba(0,0,0,.6)",
-      }}>
-        <Dashboard onPick={onPick} />
-        {sheet && <GiftSheet occ={sheet} onClose={() => setSheet(null)} />}
-      </div>
-    </div>
-  );
+// Dashboard home. Server-fetches the live occasion_config carousel, then hands off to the
+// client shell. Active tiles route into the rescue flow; inactive ones open the "coming soon" sheet.
+export default async function Page() {
+  const occasions = await listOccasions();
+  return <Home occasions={occasions} />;
 }

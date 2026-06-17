@@ -7,7 +7,7 @@ import {
   Play, Pause, Download, BookOpen,
 } from "lucide-react";
 import { C, display, ui, btnGold } from "@/lib/theme";
-import { priceFor, makeShareSlug } from "@/lib/config";
+import { priceFor } from "@/lib/config";
 import { buildStory, buildPoem, lc, cap, type Tone } from "@/lib/story";
 import { GIFTS, giftByKey, type GiftKey } from "@/lib/gifts";
 import { Flame } from "@/components/Flame";
@@ -15,6 +15,9 @@ import { Paywall } from "@/components/Paywall";
 import type { OccasionType } from "@/lib/database.types";
 import { createDraftOrder, saveIntake, logEvent } from "@/lib/modules/intake";
 import { generateDeliverables } from "@/lib/modules/generation";
+import { uploadAsset } from "@/lib/modules/assets";
+import { publishShare } from "@/lib/modules/share";
+import { setupReminder } from "@/lib/modules/onboarding";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -36,8 +39,7 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
   const [active, setActive] = useState<GiftKey>("reel");
   const [unlocked, setUnlocked] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [reminder, setReminder] = useState(false);
-  const [slug] = useState(() => makeShareSlug());
+  const [shareUrl, setShareUrl] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const orderId = useRef<string | null>(null);
 
@@ -54,7 +56,17 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
 
   function addPhotos(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files || []).slice(0, 8 - data.photos.length);
+    const baseIndex = data.photos.length;
+    // Local object URLs drive the in-session preview; the real files upload to the assets bucket
+    // in the background so the persisted share page (and later renders) have durable photos.
     set("photos", [...data.photos, ...files.map((f) => URL.createObjectURL(f))]);
+    files.forEach((f, i) => {
+      const fd = new FormData();
+      fd.append("orderId", orderId.current ?? "");
+      fd.append("file", f);
+      fd.append("position", String(baseIndex + i));
+      void uploadAsset(fd).catch((err) => console.error(err));
+    });
   }
   function removePhoto(i: number) {
     set("photos", data.photos.filter((_, idx) => idx !== i));
@@ -91,7 +103,20 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
     void logEvent({ name: "generated", orderId: orderId.current ?? undefined });
   }
 
-  const link = `oc.rs/${slug}`;
+  // Publish the share microsite (persist an unguessable slug + token, flip to delivered),
+  // then land on the Done screen with the real, sendable link.
+  async function handleSend() {
+    let url = "";
+    try {
+      const { slug, token } = await publishShare({ orderId: orderId.current ?? "" });
+      const base = typeof window !== "undefined" ? window.location.origin : "";
+      url = `${base}/s/${slug}?t=${token}`;
+    } catch (e) {
+      console.error(e);
+    }
+    setShareUrl(url);
+    setScreen("done");
+  }
 
   return (
     <Frame>
@@ -109,14 +134,15 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
           orderId={orderId.current ?? ""}
           unlocked={unlocked} onBack={() => setScreen("intake")}
           onUnlock={() => { setUnlocked(true); void logEvent({ name: "paid", orderId: orderId.current ?? undefined }); }}
-          onSend={() => { setScreen("done"); void logEvent({ name: "shared", orderId: orderId.current ?? undefined }); }}
+          onSend={handleSend}
         />
       )}
       {screen === "done" && (
         <Done
-          data={data} link={link} copied={copied}
-          onCopy={() => { navigator.clipboard?.writeText("https://" + link); setCopied(true); setTimeout(() => setCopied(false), 1600); }}
-          reminder={reminder} setReminder={setReminder} onRestart={() => router.push("/")}
+          data={data} shareUrl={shareUrl} copied={copied} occasionKey={occasion.key}
+          orderId={orderId.current ?? ""}
+          onCopy={() => { if (shareUrl) { navigator.clipboard?.writeText(shareUrl); setCopied(true); setTimeout(() => setCopied(false), 1600); } }}
+          onRestart={() => router.push("/")}
         />
       )}
       <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={addPhotos} />
@@ -368,8 +394,8 @@ function Poem({ data, poem, unlocked }: { data: Data; poem: string[]; unlocked: 
         </div>
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
-        <SecondaryBtn icon={<Download size={17} />} label="Download print" />
-        <SecondaryBtn icon={<BookOpen size={17} />} label="Order framed" />
+        <SecondaryBtn icon={<Download size={17} />} label="Download print" onClick={() => window.print()} />
+        <SecondaryBtn icon={<BookOpen size={17} />} label="Order framed" href={`mailto:hello@occasionrescue.app?subject=${encodeURIComponent("Framed poem order")}&body=${encodeURIComponent(`I'd like to order a framed print of the poem for ${data.name || "my person"}.`)}`} />
       </div>
     </div>
   );
@@ -431,17 +457,22 @@ function Book({ data, story, unlocked }: { data: Data; story: ReturnType<typeof 
       </div>
       <p style={{ textAlign: "center", color: C.muted, fontSize: 12, marginTop: 4 }}>Tap the right side to turn the page</p>
       <div style={{ display: "flex", gap: 12, marginTop: 10 }}>
-        <SecondaryBtn icon={<BookOpen size={17} />} label="Order hardcover · ships" />
+        <SecondaryBtn icon={<BookOpen size={17} />} label="Order hardcover · ships" href={`mailto:hello@occasionrescue.app?subject=${encodeURIComponent("Hardcover book order")}&body=${encodeURIComponent(`I'd like to order the hardcover "Story of Us" book for ${data.name || "my person"}.`)}`} />
       </div>
     </div>
   );
 }
 
 /* ─────────────────  done  ───────────────── */
-function Done({ data, link, copied, onCopy, reminder, setReminder, onRestart }: {
-  data: Data; link: string; copied: boolean; onCopy: () => void;
-  reminder: boolean; setReminder: (b: boolean) => void; onRestart: () => void;
+function Done({ data, shareUrl, copied, occasionKey, orderId, onCopy, onRestart }: {
+  data: Data; shareUrl: string; copied: boolean; occasionKey: OccasionType; orderId: string;
+  onCopy: () => void; onRestart: () => void;
 }) {
+  const display_link = shareUrl ? shareUrl.replace(/^https?:\/\//, "") : "preparing your link…";
+  const shareMsg = `A little something I made for you 💛 ${shareUrl}`;
+  const smsHref = `sms:?&body=${encodeURIComponent(shareMsg)}`;
+  const mailHref = `mailto:?subject=${encodeURIComponent("A little something for you")}&body=${encodeURIComponent(shareMsg)}`;
+
   return (
     <div style={{ minHeight: "100vh", padding: "30px 22px 40px", display: "flex", flexDirection: "column" }}>
       <div className="orx-rise" style={{ textAlign: "center", marginTop: 12 }}>
@@ -450,20 +481,85 @@ function Done({ data, link, copied, onCopy, reminder, setReminder, onRestart }: 
         <p style={{ color: C.muted, fontSize: 15, margin: 0 }}>{data.picks.length > 1 ? `${data.picks.length} gifts` : "Your gift"} unlocked. Here&apos;s the private link.</p>
       </div>
       <div className="orx-rise" style={{ animationDelay: ".08s", marginTop: 26, padding: "14px 16px", borderRadius: 16, border: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <span style={{ fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{link}</span>
-        <button onClick={onCopy} style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 6, background: C.panel2, border: `1px solid ${C.line}`, color: C.ivory, padding: "8px 12px", borderRadius: 10, fontWeight: 600, fontSize: 13 }}>{copied ? <><Check size={15} />Copied</> : <><Copy size={15} />Copy</>}</button>
+        <span style={{ fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display_link}</span>
+        <button onClick={onCopy} disabled={!shareUrl} style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 6, background: C.panel2, border: `1px solid ${C.line}`, color: C.ivory, padding: "8px 12px", borderRadius: 10, fontWeight: 600, fontSize: 13, opacity: shareUrl ? 1 : 0.5 }}>{copied ? <><Check size={15} />Copied</> : <><Copy size={15} />Copy</>}</button>
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
-        <SecondaryBtn icon={<MessageCircle size={18} />} label="Text it" />
-        <SecondaryBtn icon={<Mail size={18} />} label="Email it" />
+        <SecondaryBtn icon={<MessageCircle size={18} />} label="Text it" href={shareUrl ? smsHref : undefined} />
+        <SecondaryBtn icon={<Mail size={18} />} label="Email it" href={shareUrl ? mailHref : undefined} />
       </div>
-      <button onClick={() => setReminder(!reminder)} className="orx-rise" style={{ animationDelay: ".16s", textAlign: "left", marginTop: 26, padding: 20, borderRadius: 20, border: `1px solid ${reminder ? C.gold : C.line}`, background: reminder ? "rgba(235,180,92,.08)" : C.panel, color: C.ivory, display: "flex", gap: 14, alignItems: "flex-start" }}>
-        <span style={{ marginTop: 2, color: reminder ? C.gold : C.muted }}>{reminder ? <Check size={22} /> : <Bell size={22} />}</span>
-        <span><span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "block" }}>{reminder ? "We've got next year." : "Never let this happen again"}</span>
-          <span style={{ color: C.muted, fontSize: 13.5, lineHeight: 1.5 }}>{reminder ? `We'll remind you before ${data.name || "their"} next anniversary and offer a one-tap reorder. Nothing else.` : `A reminder 2 weeks out next year + one-tap reorder. No spam — just this date.`}</span></span>
-      </button>
+      <ReminderCard data={data} occasionKey={occasionKey} orderId={orderId} />
       <button onClick={onRestart} style={{ marginTop: "auto", background: "none", border: "none", color: C.muted, fontSize: 13, padding: 18 }}>← Back to dashboard</button>
     </div>
+  );
+}
+
+/* ─────────────────  reminder capture  ───────────────── */
+function ReminderCard({ data, occasionKey, orderId }: { data: Data; occasionKey: OccasionType; orderId: string }) {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [date, setDate] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit() {
+    setErr(null);
+    if (!email.trim() && !phone.trim()) { setErr("Add an email or phone number."); return; }
+    setBusy(true);
+    const res = await setupReminder({
+      orderId,
+      occasionType: occasionKey,
+      recipientName: data.name,
+      email: email.trim() || undefined,
+      phone: phone.trim() || undefined,
+      eventDate: date || undefined,
+      emailOptIn: Boolean(email.trim()),
+      smsOptIn: Boolean(phone.trim()),
+    }).catch(() => ({ ok: false, reason: "Something went wrong." }));
+    setBusy(false);
+    if (res.ok) setSaved(true);
+    else setErr(res.reason ?? "Couldn't set the reminder.");
+  }
+
+  if (saved) {
+    return (
+      <div className="orx-rise" style={{ marginTop: 26, padding: 20, borderRadius: 20, border: `1px solid ${C.gold}`, background: "rgba(235,180,92,.08)", color: C.ivory, display: "flex", gap: 14, alignItems: "flex-start" }}>
+        <span style={{ marginTop: 2, color: C.gold }}><Check size={22} /></span>
+        <span><span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "block" }}>We&apos;ve got next year.</span>
+          <span style={{ color: C.muted, fontSize: 13.5, lineHeight: 1.5 }}>We&apos;ll remind you before {data.name || "their"} next anniversary and offer a one-tap reorder. Nothing else — reply STOP anytime.</span></span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="orx-rise" style={{ marginTop: 26, padding: 20, borderRadius: 20, border: `1px solid ${open ? C.gold : C.line}`, background: open ? "rgba(235,180,92,.06)" : C.panel }}>
+      <button onClick={() => setOpen(!open)} style={{ width: "100%", textAlign: "left", background: "none", border: "none", color: C.ivory, display: "flex", gap: 14, alignItems: "flex-start", padding: 0 }}>
+        <span style={{ marginTop: 2, color: open ? C.gold : C.muted }}><Bell size={22} /></span>
+        <span><span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "block" }}>Never let this happen again</span>
+          <span style={{ color: C.muted, fontSize: 13.5, lineHeight: 1.5 }}>A reminder 2 weeks + a few days out next year, plus one-tap reorder. No spam — just this date.</span></span>
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+          <InlineField type="email" value={email} onChange={setEmail} placeholder="you@email.com" />
+          <InlineField type="tel" value={phone} onChange={setPhone} placeholder="Phone (for a text reminder)" />
+          <label style={{ display: "block" }}>
+            <span style={{ display: "block", color: C.muted, fontSize: 12, marginBottom: 6, fontWeight: 600 }}>The anniversary date</span>
+            <InlineField type="date" value={date} onChange={setDate} placeholder="" />
+          </label>
+          {err && <p style={{ color: C.blush, fontSize: 13, margin: 0 }}>{err}</p>}
+          <button onClick={submit} disabled={busy} style={{ ...btnGold, opacity: busy ? 0.7 : 1, fontSize: 15 }}>{busy ? "Saving…" : "Remind me next year"}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+function InlineField({ type, value, onChange, placeholder }: { type: string; value: string; onChange: (v: string) => void; placeholder: string }) {
+  return (
+    <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+      style={{ width: "100%", padding: "13px 14px", borderRadius: 12, border: `1px solid ${C.line}`, background: C.panel2, color: C.ivory, fontSize: 15 }} />
   );
 }
 
@@ -477,10 +573,10 @@ function Watermark() {
     </div>
   );
 }
-function SecondaryBtn({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <button style={{ flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "13px", borderRadius: 14, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory, fontWeight: 600, fontSize: 13.5 }}>{icon}{label}</button>
-  );
+function SecondaryBtn({ icon, label, onClick, href }: { icon: React.ReactNode; label: string; onClick?: () => void; href?: string }) {
+  const style: React.CSSProperties = { flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "13px", borderRadius: 14, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory, fontWeight: 600, fontSize: 13.5, textDecoration: "none" };
+  if (href) return <a href={href} style={style}>{icon}{label}</a>;
+  return <button onClick={onClick} style={style}>{icon}{label}</button>;
 }
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return <p style={{ color: C.blush, fontSize: 12, fontWeight: 700, letterSpacing: ".16em", textTransform: "uppercase", margin: 0 }}>{children}</p>;

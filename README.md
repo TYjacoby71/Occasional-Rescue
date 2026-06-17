@@ -49,8 +49,13 @@ docs/           MVP plan
 ## Build Status
 
 - **Phase 0 — Infra:** Next.js skeleton, Supabase clients, env scaffold. ✅
-- **Phase 1 — Data layer:** schema + RLS + seed + typed client stub. ✅
-- **Phase 2+:** lead intake, generation, payments, share microsite, lifecycle. See the plan.
+- **Phase 1 — Data layer:** schema + RLS + seed + generated types. ✅
+- **Phase 2 — Lead intake + live carousel:** anonymous draft orders, `occasion_config`-driven dashboard. ✅
+- **Phase 3 — Generation:** LLM-polished deliverables with template fallback. ✅
+- **Phase 4 — Payments:** Stripe Checkout (card-on-file) + dev bypass + webhook. ✅
+- **Phase 5 — Share + storage:** photo uploads to the `assets` bucket, token-guarded `/s/[slug]` microsite. ✅
+- **Phase 6 — Lifecycle:** lead capture/profiles, reminder scheduling, `CRON_SECRET` sweep, Twilio/Resend senders. ✅
+- **Remaining polish:** full login UI, `/api/og/[slug]` OG image, physical-product commerce. See `docs/SYSTEM-STATE.md`.
 
 ## Goals
 

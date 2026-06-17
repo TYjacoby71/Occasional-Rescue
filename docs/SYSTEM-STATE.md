@@ -44,51 +44,62 @@ marks the order `paid` and writes a `payments` row. Idempotent via `webhook_even
 
 ---
 
-## Gaps — looks done, isn't wired
+## Gaps — now wired
 
-These are the seams that exist as stubs or placeholders. Ordered roughly by user impact.
+The six gaps below were stubs/placeholders. All are now implemented. Provider-dependent paths
+(SMS/email send) degrade safely when keys are absent and record the attempt either way.
 
-### 1. Photos never reach storage
-Intake stores photos as `URL.createObjectURL(file)` — browser-only blob URLs
-(`RescueFlow.tsx` `addPhotos`). Nothing uploads to the `assets` bucket or writes the `assets`
-table. The bucket is ready but unused.
-**Needed:** an upload step (client → signed upload URL or server action) writing to
-`assets/{order_id}/…`, plus `assets` rows with `storage_path`. Blob URLs die on refresh and
-can't render in the share page.
+### 1. Photos reach storage ✅
+`RescueFlow.addPhotos` keeps a local object URL for the in-session preview AND fires
+`uploadAsset()` (`lib/modules/assets.ts`) per file — a service-role server action that uploads
+to `assets/{order_id}/{uuid}.{ext}` and writes an `assets` row. The share render fetches 7-day
+signed URLs via `signedUrlsForOrder()`.
 
-### 2. No share page
-The "Done" screen shows a fake `oc.rs/{slug}` link; the slug is generated client-side
-(`makeShareSlug()`) and **never saved** to `orders.share_slug` / `orders.share_token`. There is
-no `/s/[slug]` route. A "sent" gift is not actually viewable by anyone.
-**Needed:** persist `share_slug` + `share_token` on the order; build `app/s/[slug]/page.tsx`
-(service-role render, token-guarded) composing the order's deliverables into one themed
-microsite; signed URLs for `assets`. (`MVP-PLAN.md` also calls for `/api/og/[slug]` OG images.)
+### 2. Share page ✅
+`publishShare()` (`lib/modules/share.ts`) stamps the order with an unguessable `share_slug` +
+`share_token`, flips it to `delivered`, and is idempotent on re-send. `app/s/[slug]/page.tsx`
+(service-role render, `?t=` token-guarded → 404 on mismatch) composes the order's intake +
+deliverables + signed photos into `components/Microsite.tsx`. The Done screen shows the real,
+sendable `…/s/{slug}?t={token}` link. *(Still TODO: `/api/og/[slug]` OG image.)*
 
-### 3. Dashboard reads static data
-`lib/occasions.ts` is a hardcoded mirror of the seed, not a live read of `occasion_config`.
-**Needed:** `SELECT * FROM occasion_config WHERE active ORDER BY display_order` (Phase 2),
-plus day-of preselect via the `date_rule` engine in `lib/occasion/date-rules.ts`.
+### 3. Dashboard reads live config ✅
+`lib/modules/occasion.ts` `listOccasions()` reads all `occasion_config` rows (service role, so
+inactive "coming soon" tiles render too), deriving each tile's date label from `date_rule` via
+the date engine. `app/page.tsx` is a server component (ISR, `revalidate = 300`) feeding
+`components/Home.tsx`. Falls back to the static list when Supabase isn't configured.
 
-### 4. No auth / no profiles
-`profiles` and all per-user RLS policies exist but are unused — everything runs anonymously
-through the service role. There is no signup, login, or post-purchase account claim.
-**Needed:** Supabase Auth + an onboarding step that claims the anonymous order (`user_id` set
-from `auth.uid()`), enabling reminders and reorders.
+### 4. Auth / profiles ✅ (lead capture)
+The schema requires a profile (FK → `auth.users`) before owning an occasion, so reminder opt-in
+(`lib/modules/onboarding.ts` `setupReminder()`) creates/reuses an auth user via the admin API,
+upserts the `profiles` row + consent timestamps, and claims the anonymous order
+(`orders.user_id`). Full login UI remains a later phase, but the profile model is now exercised.
 
-### 5. Reminders are local-state only
-The "remind me next year" toggle writes nothing. `scheduled_messages` + the cron sweep
-(`/api/cron/sweep`, `CRON_SECRET`) and the Twilio/Resend senders are unbuilt and unconfigured.
-**Needed:** on opt-in, write `occasions` (`reminder_opt_in`, `next_occurrence`) +
-`scheduled_messages`; a daily `CRON_SECRET`-guarded sweep; messaging modules + provider keys.
+### 5. Reminder engine ✅
+`setupReminder()` writes `recipients` + `occasions` (`reminder_opt_in`, computed
+`next_occurrence`) + `scheduled_messages` at each `default_lead_days` offset. The
+`CRON_SECRET`-guarded sweep (`app/api/cron/sweep/route.ts`) picks due rows, resolves the owner's
+contact, and sends via `lib/modules/messaging.ts` (Twilio SMS / Resend email over REST; "skips"
+cleanly without keys), logging every attempt to `message_log`.
 
-### 6. Placeholder action buttons
-"Text it", "Email it", "Download print", "Order framed", "Order hardcover" are non-functional
-(`SecondaryBtn` with no handler).
+### 6. Action buttons ✅
+"Text it" / "Email it" use real `sms:` / `mailto:` links carrying the share URL. "Download print"
+calls `window.print()`. "Order framed" / "Order hardcover" open a prefilled `mailto:` concierge
+draft (physical fulfillment is intentionally a mailto handoff for now — no commerce backend).
 
 ---
 
 ## Build phases
 
 Per `README.md` / `MVP-PLAN.md`: **Phases 0–4** (skeleton, data layer, intake, generation,
-payments) are in. Remaining: the share microsite, storage uploads, auth/onboarding, and the
-lifecycle/reminder engine.
+payments) plus the share microsite, storage uploads, lead-capture/profiles, and the
+lifecycle/reminder engine are now in. Remaining polish: full login UI, the `/api/og/[slug]` OG
+image, and physical-product commerce.
+
+## Runtime notes
+- `npm run typecheck` and `npm run build` both pass.
+- DB-backed paths need `SUPABASE_SERVICE_ROLE_KEY` set; without it everything degrades to dev
+  no-ops (synthetic ids, paywall bypass, static carousel) so the UI still runs.
+- Reminder sends need `CRON_SECRET` (to call the sweep) and Twilio/Resend keys to actually
+  deliver; otherwise the sweep drains the queue and logs `skipped` in `message_log`.
+- `lib/database.types.ts` is now generated from the live project (replacing the hand-authored
+  stub); regenerate after schema changes.
