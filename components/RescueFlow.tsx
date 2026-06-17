@@ -16,7 +16,7 @@ import { Paywall } from "@/components/Paywall";
 import { PrintOrder } from "@/components/PrintOrder";
 import type { OccasionType } from "@/lib/database.types";
 import { createDraftOrder, saveIntake, logEvent } from "@/lib/modules/intake";
-import { generateDeliverables } from "@/lib/modules/generation";
+import { generateDeliverables, reworkPoem as requestPoemRework } from "@/lib/modules/generation";
 import { uploadAsset } from "@/lib/modules/assets";
 import { publishShare } from "@/lib/modules/share";
 import { setupReminder } from "@/lib/modules/onboarding";
@@ -39,8 +39,9 @@ export function RescueFlow({ occasion }: { occasion: Occasion }) {
   });
   const [story, setStory] = useState<ReturnType<typeof buildStory> | null>(null);
   const [poem, setPoem] = useState<string[] | null>(null);
-  const [poemVariant, setPoemVariant] = useState(0); // which phrasing is showing
+  const [poemVariant, setPoemVariant] = useState(0); // which draft index is showing
   const [poemReworks, setPoemReworks] = useState(0); // free reworks spent before the paywall
+  const [reworking, setReworking] = useState(false); // an LLM rework is in flight
   const [active, setActive] = useState<GiftKey>("reel");
   const [unlocked, setUnlocked] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -125,14 +126,28 @@ export function RescueFlow({ occasion }: { occasion: Occasion }) {
   }
 
   // The Poem is the free-to-try hook: 1 free rework, then it locks until the digital bundle is
-  // paid. Paying (unlocked) lifts the cap. Reworks regenerate locally so they're instant.
-  function reworkPoem() {
+  // paid. Paying (unlocked) lifts the cap. Each rework regenerates via the model server-side.
+  async function reworkPoem() {
+    if (reworking) return;
     if (!unlocked && poemReworks >= FREE_POEM_REWORKS) return; // locked — paywall takes over
     const next = poemVariant + 1;
-    setPoemVariant(next);
-    setPoem(buildPoem(data, next));
-    if (!unlocked) setPoemReworks((n) => n + 1);
-    void logEvent({ name: "poem_reworked", orderId: orderId.current ?? undefined });
+    setReworking(true);
+    try {
+      const { poem: fresh } = await requestPoemRework({
+        orderId: orderId.current ?? "",
+        intake: { name: data.name, pet: data.pet, secret: data.secret, reason: data.reason },
+        tone: data.tone,
+        variant: next,
+      });
+      setPoemVariant(next);
+      setPoem(fresh);
+      if (!unlocked) setPoemReworks((n) => n + 1);
+      void logEvent({ name: "poem_reworked", orderId: orderId.current ?? undefined });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setReworking(false);
+    }
   }
 
   // Publish the share microsite (persist an unguessable slug + token, flip to delivered),
@@ -165,7 +180,7 @@ export function RescueFlow({ occasion }: { occasion: Occasion }) {
         <Preview
           data={data} story={story} poem={poem} active={active} setActive={setActive}
           orderId={orderId.current ?? ""} days={days}
-          onRework={reworkPoem} reworksLeft={Math.max(0, FREE_POEM_REWORKS - poemReworks)}
+          onRework={reworkPoem} reworksLeft={Math.max(0, FREE_POEM_REWORKS - poemReworks)} reworking={reworking}
           unlocked={unlocked} onBack={() => setScreen("intake")}
           onUnlock={() => { setUnlocked(true); void logEvent({ name: "paid", orderId: orderId.current ?? undefined }); }}
           onSend={handleSend}
@@ -402,10 +417,10 @@ function Generating() {
 }
 
 /* ─────────────────  preview wrapper  ───────────────── */
-function Preview({ data, story, poem, active, setActive, orderId, days, onRework, reworksLeft, unlocked, onBack, onUnlock, onSend }: {
+function Preview({ data, story, poem, active, setActive, orderId, days, onRework, reworksLeft, reworking, unlocked, onBack, onUnlock, onSend }: {
   data: Data; story: ReturnType<typeof buildStory>; poem: string[];
   active: GiftKey; setActive: (k: GiftKey) => void; orderId: string; days: number; unlocked: boolean;
-  onRework: () => void; reworksLeft: number;
+  onRework: () => void; reworksLeft: number; reworking: boolean;
   onBack: () => void; onUnlock: () => void; onSend: () => void;
 }) {
   const picks: GiftKey[] = data.picks.length ? data.picks : ["reel"];
@@ -432,7 +447,7 @@ function Preview({ data, story, poem, active, setActive, orderId, days, onRework
       )}
       <div style={{ padding: "16px 16px 0" }}>
         {active === "reel" && <Reel data={data} story={story} unlocked={unlocked} />}
-        {active === "poem" && <Poem data={data} poem={poem} unlocked={unlocked} onRework={onRework} reworksLeft={reworksLeft} onUnlock={onUnlock} />}
+        {active === "poem" && <Poem data={data} poem={poem} unlocked={unlocked} onRework={onRework} reworksLeft={reworksLeft} reworking={reworking} onUnlock={onUnlock} />}
         {active === "photobook" && <Book data={data} story={story} unlocked={unlocked} />}
         {active === "portrait" && <FramedPrint data={data} poem={poem} />}
         {active === "collage" && <Collage data={data} />}
@@ -688,9 +703,9 @@ function Reel({ data, story, unlocked }: { data: Data; story: ReturnType<typeof 
 }
 
 /* ─────────────────  THE POEM  ───────────────── */
-function Poem({ data, poem, unlocked, onRework, reworksLeft, onUnlock }: {
+function Poem({ data, poem, unlocked, onRework, reworksLeft, reworking, onUnlock }: {
   data: Data; poem: string[]; unlocked: boolean;
-  onRework: () => void; reworksLeft: number; onUnlock: () => void;
+  onRework: () => void; reworksLeft: number; reworking: boolean; onUnlock: () => void;
 }) {
   // Free-to-try: one rework on the house, then the button locks and points at the paywall.
   // Paying (unlocked) lifts the cap entirely.
@@ -712,9 +727,10 @@ function Poem({ data, poem, unlocked, onRework, reworksLeft, onUnlock }: {
         </div>
       </div>
       {canRework ? (
-        <button onClick={onRework} style={{ fontFamily: ui, width: "100%", marginTop: 14, padding: "12px", borderRadius: 12, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600 }}>
-          <RefreshCw size={16} /> Try another version
-          {!unlocked && <span style={{ color: C.muted, fontWeight: 500 }}>· {reworksLeft} free left</span>}
+        <button onClick={onRework} disabled={reworking} style={{ fontFamily: ui, width: "100%", marginTop: 14, padding: "12px", borderRadius: 12, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory, opacity: reworking ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600 }}>
+          <RefreshCw size={16} className={reworking ? "orx-spin" : undefined} />
+          {reworking ? "Writing a new version…" : "Try another version"}
+          {!reworking && !unlocked && <span style={{ color: C.muted, fontWeight: 500 }}>· {reworksLeft} free left</span>}
         </button>
       ) : (
         <button onClick={onUnlock} style={{ fontFamily: ui, width: "100%", marginTop: 14, padding: "12px", borderRadius: 12, border: `1px solid ${C.gold}`, background: "rgba(235,180,92,.08)", color: C.goldSoft, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600 }}>
