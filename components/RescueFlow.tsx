@@ -11,8 +11,12 @@ import { priceFor, makeShareSlug } from "@/lib/config";
 import { buildStory, buildPoem, lc, cap, type Tone } from "@/lib/story";
 import { GIFTS, giftByKey, type GiftKey } from "@/lib/gifts";
 import { Flame } from "@/components/Flame";
+import { Paywall } from "@/components/Paywall";
 import type { OccasionType } from "@/lib/database.types";
 import { createDraftOrder, saveIntake, logEvent } from "@/lib/modules/intake";
+import { generateDeliverables } from "@/lib/modules/generation";
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type FlowScreen = "intake" | "gen" | "preview" | "done";
 type Data = {
@@ -56,7 +60,7 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
     set("photos", data.photos.filter((_, idx) => idx !== i));
   }
 
-  function generate() {
+  async function generate() {
     setScreen("gen");
     void saveIntake({
       orderId: orderId.current ?? "",
@@ -68,14 +72,23 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
       giftKeys: data.picks,
     }).catch((e) => console.error(e));
 
-    setTimeout(() => {
-      setStory(buildStory(data));
-      setPoem(buildPoem(data));
-      setActive(data.picks[0] || "reel");
-      setUnlocked(false);
-      setScreen("preview");
-      void logEvent({ name: "generated", orderId: orderId.current ?? undefined });
-    }, 2400);
+    // Real LLM polish (Phase 3) with a template fallback; keep a minimum on-screen beat.
+    const [res] = await Promise.all([
+      generateDeliverables({
+        orderId: orderId.current ?? "",
+        intake: { name: data.name, pet: data.pet, secret: data.secret, reason: data.reason },
+        tone: data.tone,
+        giftKeys: data.picks,
+      }).catch(() => ({ story: buildStory(data), poem: buildPoem(data) })),
+      delay(1500),
+    ]);
+
+    setStory(res.story);
+    setPoem(res.poem);
+    setActive(data.picks[0] || "reel");
+    setUnlocked(false);
+    setScreen("preview");
+    void logEvent({ name: "generated", orderId: orderId.current ?? undefined });
   }
 
   const link = `oc.rs/${slug}`;
@@ -93,6 +106,7 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
       {screen === "preview" && story && poem && (
         <Preview
           data={data} story={story} poem={poem} active={active} setActive={setActive}
+          orderId={orderId.current ?? ""}
           unlocked={unlocked} onBack={() => setScreen("intake")}
           onUnlock={() => { setUnlocked(true); void logEvent({ name: "paid", orderId: orderId.current ?? undefined }); }}
           onSend={() => { setScreen("done"); void logEvent({ name: "shared", orderId: orderId.current ?? undefined }); }}
@@ -222,9 +236,9 @@ function Generating() {
 }
 
 /* ─────────────────  preview wrapper  ───────────────── */
-function Preview({ data, story, poem, active, setActive, unlocked, onBack, onUnlock, onSend }: {
+function Preview({ data, story, poem, active, setActive, orderId, unlocked, onBack, onUnlock, onSend }: {
   data: Data; story: ReturnType<typeof buildStory>; poem: string[];
-  active: GiftKey; setActive: (k: GiftKey) => void; unlocked: boolean;
+  active: GiftKey; setActive: (k: GiftKey) => void; orderId: string; unlocked: boolean;
   onBack: () => void; onUnlock: () => void; onSend: () => void;
 }) {
   const picks: GiftKey[] = data.picks.length ? data.picks : ["reel"];
@@ -254,7 +268,7 @@ function Preview({ data, story, poem, active, setActive, unlocked, onBack, onUnl
       <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
         <div style={{ width: "100%", maxWidth: 430, padding: 16, background: `linear-gradient(180deg,transparent,${C.ink} 38%)`, pointerEvents: "auto" }}>
           {!unlocked
-            ? <button onClick={onUnlock} style={btnGold}>Unlock {picks.length > 1 ? `all ${picks.length}` : ""} &amp; send · ${priceFor(picks.length)}</button>
+            ? <Paywall orderId={orderId} amountCents={priceFor(picks.length) * 100} picksCount={picks.length} onUnlock={onUnlock} />
             : <button onClick={onSend} style={btnGold}>Send it →</button>}
         </div>
       </div>

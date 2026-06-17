@@ -10,12 +10,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
     "lucide-react": "^0.456.0",
     "next": "^15.0.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "stripe": "^17.7.0",
     "tone": "^15.0.4"
   },
   "devDependencies": {
