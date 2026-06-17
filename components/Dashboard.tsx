@@ -3,6 +3,7 @@
 import { C, display } from "@/lib/theme";
 import { type OccasionTile } from "@/lib/occasions";
 import { Flame } from "@/components/Flame";
+import { Bell, Lock } from "lucide-react";
 
 // Ported from the prototype's <Dashboard/>. Renders the carousel from the live occasion_config
 // rows passed down from the server. The first (lowest display_order) tile is featured.
@@ -60,23 +61,37 @@ export function Dashboard({ occasions, onPick }: { occasions: OccasionTile[]; on
         Other dates
       </p>
       <div className="orx-scroll" style={{ display: "flex", gap: 12, overflowX: "auto", margin: "0 -22px", padding: "0 22px 6px" }}>
-        {rest.map((o) => (
-          <button
-            key={o.key}
-            onClick={() => onPick(o)}
-            style={{
-              flex: "0 0 auto", width: 132, textAlign: "left", padding: 16, borderRadius: 18,
-              background: C.panel, border: `1px solid ${C.line}`, color: C.ivory,
-            }}
-          >
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: C.panel2, display: "grid", placeItems: "center", marginBottom: 12 }}>
-              <Flame size={15} glow={false} />
-            </div>
-            <div style={{ fontFamily: display, fontWeight: 500, fontSize: 19, lineHeight: 1.1 }}>{o.label}</div>
-            <div style={{ color: C.muted, fontSize: 12.5, marginTop: 4 }}>{o.date}</div>
-            {o.giftTarget && <div style={{ color: C.blush, fontSize: 11, marginTop: 6, fontWeight: 600 }}>Spouse or parent</div>}
-          </button>
-        ))}
+        {rest.map((o) => {
+          const soon = !o.active;
+          return (
+            <button
+              key={o.key}
+              onClick={() => onPick(o)}
+              aria-label={soon ? `${o.label} — coming soon, get notified` : o.label}
+              style={{
+                flex: "0 0 auto", width: 132, textAlign: "left", padding: 16, borderRadius: 18,
+                position: "relative", color: soon ? C.muted : C.ivory,
+                background: soon ? "transparent" : C.panel,
+                border: soon ? `1px dashed ${C.line}` : `1px solid ${C.line}`,
+                opacity: soon ? 0.78 : 1,
+              }}
+            >
+              {soon && (
+                <span style={{ position: "absolute", top: 10, right: 10, display: "inline-flex", alignItems: "center", gap: 3, fontSize: 9.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 6px" }}>
+                  <Lock size={9} /> Soon
+                </span>
+              )}
+              <div style={{ width: 30, height: 30, borderRadius: 9, background: C.panel2, display: "grid", placeItems: "center", marginBottom: 12, color: soon ? C.muted : C.gold }}>
+                <Flame size={15} glow={false} />
+              </div>
+              <div style={{ fontFamily: display, fontWeight: 500, fontSize: 19, lineHeight: 1.1, color: soon ? "#C9BFD4" : C.ivory }}>{o.label}</div>
+              <div style={{ color: C.muted, fontSize: 12.5, marginTop: 4 }}>{o.date}</div>
+              {soon
+                ? <div style={{ color: C.blush, fontSize: 11, marginTop: 8, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><Bell size={11} /> Notify me</div>
+                : o.giftTarget && <div style={{ color: C.blush, fontSize: 11, marginTop: 6, fontWeight: 600 }}>Spouse or parent</div>}
+            </button>
+          );
+        })}
       </div>
 
       <p style={{ marginTop: 26, color: C.muted, fontSize: 12.5, lineHeight: 1.5, textAlign: "center" }}>

@@ -137,3 +137,43 @@ export async function setupReminder(input: {
   await logEvent({ name: "onboard_complete", orderId: input.orderId, props: { channel } });
   return { ok: true };
 }
+
+// Waitlist capture for an occasion that isn't live yet (the greyed dashboard tiles). No order
+// exists at this point, so this is a lighter touch than setupReminder: create/reuse the contact,
+// store the opt-ins as a lead, and record interest in the occasion so we can reach out when it
+// launches. Degrades to a dev no-op without Supabase.
+export async function joinWaitlist(input: {
+  occasionType: OccasionType;
+  email?: string;
+  phone?: string;
+  emailOptIn: boolean;
+  smsOptIn: boolean;
+}): Promise<{ ok: boolean; reason?: string }> {
+  const email = input.email?.trim() || undefined;
+  const phone = input.phone?.trim() || undefined;
+  if (!email && !phone) return { ok: false, reason: "Add an email or phone number." };
+
+  if (!isSupabaseConfigured()) return { ok: true }; // dev no-op so the UI flow completes
+
+  const supabase = createServiceClient();
+  const userId = await findOrCreateUser(supabase, email, phone);
+  if (!userId) return { ok: false, reason: "Couldn't save your contact." };
+
+  const now = new Date().toISOString();
+  await supabase.from("profiles").upsert(
+    {
+      id: userId,
+      status: "lead",
+      email: email ?? null,
+      phone: phone ?? null,
+      email_opt_in: input.emailOptIn,
+      email_opt_in_at: input.emailOptIn ? now : null,
+      sms_opt_in: input.smsOptIn,
+      sms_opt_in_at: input.smsOptIn ? now : null,
+    },
+    { onConflict: "id" },
+  );
+
+  await logEvent({ name: "waitlist_join", props: { occasion: input.occasionType, channel: phone && input.smsOptIn ? "sms" : "email" } });
+  return { ok: true };
+}

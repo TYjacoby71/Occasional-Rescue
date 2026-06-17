@@ -30,7 +30,7 @@ All anonymous — no signup. One draft order carries the whole session.
 
 | # | Surface | File | What happens |
 |---|---------|------|--------------|
-| 1 | Dashboard | `app/page.tsx`, `components/Dashboard.tsx` | Renders occasion tiles from a **static** list (`lib/occasions.ts`). Only **Anniversary** is active; others open a "coming soon" sheet. |
+| 1 | Dashboard | `app/page.tsx`, `components/Dashboard.tsx`, `components/GiftSheet.tsx` | Renders occasion tiles from the live `occasion_config` (static fallback in `lib/occasions.ts`). Only **Anniversary** is active; inactive tiles render **greyed with a "Soon" lock + "Notify me"** and open a sheet that captures an email/phone → `joinWaitlist()` (creates/reuses the contact as a `lead` with opt-ins + logs `waitlist_join`). |
 | 2 | Occasion route | `app/[occasion]/page.tsx` | 404s any inactive occasion; else mounts `RescueFlow`. |
 | 3 | Rescue flow | `components/RescueFlow.tsx` | On mount → `createDraftOrder()` inserts `orders` row (`user_id NULL`, `status='draft'`) via the **service role** + logs `panic_start`. **6-step intake**: who → **when (event date)** → photos → shared secret → "I love you because…" → gift pick + tone. The date step drives the **neck-down** (see below). |
 | 4 | Generate | `lib/modules/generation.ts`, `lib/modules/intake.ts` | `saveIntake()` (now also stores `event_date` + `days_until` in `intake`) → `status='generating'`. `generateDeliverables()` synthesizes only the **digital** picks (reel/poem) via the **Anthropic API** (`LLM_API_KEY`, default `claude-opus-4-8`) into a "Story of Us", with a template fallback. Persists to `deliverables` (`status='preview'`). |
