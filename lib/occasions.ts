@@ -17,3 +17,6 @@ export const OCCASIONS: OccasionTile[] = [
   { key: "fathers_day", label: "Father's Day", date: "Jun 21", active: false, giftTarget: true },
   { key: "birthday", label: "Birthday", date: "Set a date", active: false },
 ];
+
+export const findOccasion = (key: string): OccasionTile | undefined =>
+  OCCASIONS.find((o) => o.key === key);

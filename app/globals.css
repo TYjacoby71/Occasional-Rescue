@@ -9,6 +9,8 @@ body { background: #0E0C16; }
 @keyframes orxGlow { 0% { opacity: 0; transform: scale(.6); } 60% { opacity: .9; } 100% { opacity: .55; transform: scale(1); } }
 @keyframes orxRise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes orxFlicker { 0%,100% { opacity: .9; } 45% { opacity: .7; } 70% { opacity: 1; } }
+@keyframes orxKen { 0% { transform: scale(1.04) translate(0,0); } 100% { transform: scale(1.18) translate(-3%,-2%); } }
+@keyframes orxFade { from { opacity: 0; } to { opacity: 1; } }
 
 .orx-rise { animation: orxRise .6s cubic-bezier(.2,.7,.2,1) both; }
 
