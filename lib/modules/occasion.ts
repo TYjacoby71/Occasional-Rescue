@@ -40,6 +40,7 @@ export async function listOccasions(): Promise<OccasionTile[]> {
     key: row.type,
     label: row.label,
     date: dateLabel(row.type, row.date_rule),
+    dateRule: row.date_rule,
     active: row.active,
     giftTarget: row.needs_gift_target || undefined,
   }));

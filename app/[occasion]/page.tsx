@@ -13,5 +13,14 @@ export default async function OccasionPage({
   const occasion = findOccasion(key);
   if (!occasion || !occasion.active) notFound();
 
-  return <RescueFlow occasion={{ key: occasion.key, label: occasion.label }} />;
+  return (
+    <RescueFlow
+      occasion={{
+        key: occasion.key,
+        label: occasion.label,
+        dateRule: occasion.dateRule,
+        giftTarget: occasion.giftTarget,
+      }}
+    />
+  );
 }

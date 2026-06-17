@@ -72,12 +72,15 @@ export async function getShare(slug: string, token: string): Promise<ShareData |
     .from("deliverables")
     .select("kind,payload")
     .eq("order_id", order.id);
-  const deliverables = dels ?? [];
+  // Only digital deliverables compose the recipient's microsite; print keepsakes are shipped to
+  // the buyer and must never leak onto (or hijack the story of) the public share page.
+  const DIGITAL = new Set(["reel", "poem", "microsite"]);
+  const deliverables = (dels ?? []).filter((d) => DIGITAL.has(d.kind));
 
   const photos = await signedUrlsForOrder(order.id);
   const intake = (order.intake ?? {}) as Record<string, string>;
 
-  const storyDel = deliverables.find((d) => d.kind !== "poem");
+  const storyDel = deliverables.find((d) => d.kind === "reel");
   const poemDel = deliverables.find((d) => d.kind === "poem");
   const storyPayload = (storyDel?.payload ?? {}) as { headline?: string; body?: string };
   const poemPayload = (poemDel?.payload ?? {}) as { poem?: string[] };

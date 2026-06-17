@@ -4,14 +4,16 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Copy, Check, Bell, MessageCircle, Mail, ImagePlus, X,
-  Play, Pause, Download, BookOpen,
+  Play, Pause, Download,
 } from "lucide-react";
 import { C, display, ui, btnGold } from "@/lib/theme";
 import { priceFor } from "@/lib/config";
 import { buildStory, buildPoem, lc, cap, type Tone } from "@/lib/story";
-import { GIFTS, giftByKey, type GiftKey } from "@/lib/gifts";
+import { GIFTS, giftByKey, isPrint, splitByLeadTime, type GiftKey } from "@/lib/gifts";
+import { daysUntil, computedEventDate, leadLabel } from "@/lib/occasion/lead-time";
 import { Flame } from "@/components/Flame";
 import { Paywall } from "@/components/Paywall";
+import { PrintOrder } from "@/components/PrintOrder";
 import type { OccasionType } from "@/lib/database.types";
 import { createDraftOrder, saveIntake, logEvent } from "@/lib/modules/intake";
 import { generateDeliverables } from "@/lib/modules/generation";
@@ -21,18 +23,19 @@ import { setupReminder } from "@/lib/modules/onboarding";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+type Occasion = { key: OccasionType; label: string; dateRule: string; giftTarget?: boolean };
 type FlowScreen = "intake" | "gen" | "preview" | "done";
 type Data = {
-  name: string; pet: string; photos: string[];
+  name: string; pet: string; eventDate: string; photos: string[];
   secret: string; reason: string; tone: Tone; picks: GiftKey[];
 };
 
-export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label: string } }) {
+export function RescueFlow({ occasion }: { occasion: Occasion }) {
   const router = useRouter();
   const [screen, setScreen] = useState<FlowScreen>("intake");
   const [step, setStep] = useState(0);
   const [data, setData] = useState<Data>({
-    name: "", pet: "", photos: [], secret: "", reason: "", tone: "heartfelt", picks: [],
+    name: "", pet: "", eventDate: "", photos: [], secret: "", reason: "", tone: "heartfelt", picks: [],
   });
   const [story, setStory] = useState<ReturnType<typeof buildStory> | null>(null);
   const [poem, setPoem] = useState<string[] | null>(null);
@@ -43,15 +46,25 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
   const fileRef = useRef<HTMLInputElement>(null);
   const orderId = useRef<string | null>(null);
 
+  // Holiday occasions (Valentine's, Mother's/Father's Day) have a computed date — prefill it so
+  // the date step is read-only. 'user' occasions (anniversary, birthday) leave it blank to ask.
+  const computedDate = computedEventDate(occasion.dateRule);
+  const dateIsFixed = computedDate !== null;
+
   const set = <K extends keyof Data>(k: K, v: Data[K]) => setData((d) => ({ ...d, [k]: v }));
   const togglePick = (k: GiftKey) =>
     setData((d) => ({ ...d, picks: d.picks.includes(k) ? d.picks.filter((x) => x !== k) : [...d.picks, k] }));
 
-  // Create the anonymous draft order on entry (no signup).
+  // Days of runway until the event — drives which deliverables the picker offers (the neck-down).
+  const days = daysUntil(data.eventDate || computedDate || "");
+
+  // Create the anonymous draft order on entry (no signup); prefill a computed holiday date.
   useEffect(() => {
+    if (computedDate) set("eventDate", computedDate);
     createDraftOrder({ occasionType: occasion.key })
       .then(({ orderId: id }) => { orderId.current = id; })
       .catch((e) => console.error(e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [occasion.key]);
 
   function addPhotos(e: React.ChangeEvent<HTMLInputElement>) {
@@ -74,23 +87,25 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
 
   async function generate() {
     setScreen("gen");
+    const digitalPicks = data.picks.filter((k) => !isPrint(k));
     void saveIntake({
       orderId: orderId.current ?? "",
       intake: {
         name: data.name, pet: data.pet, secret: data.secret,
         reason: data.reason, photo_count: data.photos.length,
+        event_date: data.eventDate || null, days_until: days,
       },
       tone: data.tone,
       giftKeys: data.picks,
     }).catch((e) => console.error(e));
 
-    // Real LLM polish (Phase 3) with a template fallback; keep a minimum on-screen beat.
+    // Only the digital deliverables are synthesized; print keepsakes are real shippable orders.
     const [res] = await Promise.all([
       generateDeliverables({
         orderId: orderId.current ?? "",
         intake: { name: data.name, pet: data.pet, secret: data.secret, reason: data.reason },
         tone: data.tone,
-        giftKeys: data.picks,
+        giftKeys: digitalPicks,
       }).catch(() => ({ story: buildStory(data), poem: buildPoem(data) })),
       delay(1500),
     ]);
@@ -123,6 +138,7 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
       {screen === "intake" && (
         <Intake
           data={data} step={step} setStep={setStep} set={set} togglePick={togglePick}
+          days={days} dateIsFixed={dateIsFixed} occasionLabel={occasion.label}
           onBack={() => (step === 0 ? router.push("/") : setStep(step - 1))}
           fileRef={fileRef} removePhoto={removePhoto} onGenerate={generate}
         />
@@ -131,7 +147,7 @@ export function RescueFlow({ occasion }: { occasion: { key: OccasionType; label:
       {screen === "preview" && story && poem && (
         <Preview
           data={data} story={story} poem={poem} active={active} setActive={setActive}
-          orderId={orderId.current ?? ""}
+          orderId={orderId.current ?? ""} days={days}
           unlocked={unlocked} onBack={() => setScreen("intake")}
           onUnlock={() => { setUnlocked(true); void logEvent({ name: "paid", orderId: orderId.current ?? undefined }); }}
           onSend={handleSend}
@@ -166,14 +182,16 @@ function Frame({ children }: { children: React.ReactNode }) {
 }
 
 /* ─────────────────  intake  ───────────────── */
-function Intake({ data, step, setStep, set, togglePick, onBack, fileRef, removePhoto, onGenerate }: {
+function Intake({ data, step, setStep, set, togglePick, days, dateIsFixed, occasionLabel, onBack, fileRef, removePhoto, onGenerate }: {
   data: Data; step: number; setStep: (n: number) => void;
   set: <K extends keyof Data>(k: K, v: Data[K]) => void; togglePick: (k: GiftKey) => void;
+  days: number; dateIsFixed: boolean; occasionLabel: string;
   onBack: () => void; fileRef: React.RefObject<HTMLInputElement | null>;
   removePhoto: (i: number) => void; onGenerate: () => void;
 }) {
-  const STEPS = 5;
+  const STEPS = 6;
   const next = () => setStep(Math.min(step + 1, STEPS - 1));
+  const hasPrint = data.picks.some(isPrint);
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "22px 22px 0" }}>
@@ -187,8 +205,9 @@ function Intake({ data, step, setStep, set, togglePick, onBack, fileRef, removeP
           <Field label="What you call them" value={data.pet} onChange={(v) => set("pet", v)} placeholder="my love, Mays…" />
           <Spacer /><Primary onClick={next} disabled={!data.name.trim()}>Continue</Primary>
         </>}
-        {step === 1 && <>
-          <Eyebrow>Step 2</Eyebrow><Q>Add a few of your photos</Q>
+        {step === 1 && <DateStep data={data} set={set} days={days} dateIsFixed={dateIsFixed} occasionLabel={occasionLabel} onNext={next} />}
+        {step === 2 && <>
+          <Eyebrow>Step 3</Eyebrow><Q>Add a few of your photos</Q>
           <p style={{ color: C.muted, marginTop: -6, fontSize: 14.5 }}>Real moments make every gift land harder.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginTop: 18 }}>
             {data.photos.map((p, i) => (
@@ -202,45 +221,133 @@ function Intake({ data, step, setStep, set, togglePick, onBack, fileRef, removeP
           </div>
           <Spacer /><Primary onClick={next}>{data.photos.length ? "Continue" : "Skip for now"}</Primary>
         </>}
-        {step === 2 && <>
-          <Eyebrow>Step 3</Eyebrow><Q>One thing only the two of you would get</Q>
+        {step === 3 && <>
+          <Eyebrow>Step 4</Eyebrow><Q>One thing only the two of you would get</Q>
           <Area value={data.secret} onChange={(v) => set("secret", v)} placeholder="The diner on 8th. The way you say 'okay okay okay.'" />
           <Spacer /><Primary onClick={next}>Continue</Primary>
         </>}
-        {step === 3 && <>
-          <Eyebrow>Step 4</Eyebrow><Q style={{ fontStyle: "italic" }}>Finish this: <span style={{ color: C.gold }}>I love you because…</span></Q>
+        {step === 4 && <>
+          <Eyebrow>Step 5</Eyebrow><Q style={{ fontStyle: "italic" }}>Finish this: <span style={{ color: C.gold }}>I love you because…</span></Q>
           <Area value={data.reason} onChange={(v) => set("reason", v)} placeholder="you make the hard days feel survivable." />
           <Spacer /><Primary onClick={next} disabled={!data.reason.trim()}>Continue</Primary>
         </>}
-        {step === 4 && <>
-          <Eyebrow>Last step</Eyebrow><Q>Choose your gift</Q>
-          <p style={{ color: C.muted, marginTop: -6, fontSize: 14.5 }}>Pick one — or make all three.</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 18 }}>
-            {GIFTS.map((g) => {
-              const on = data.picks.includes(g.key);
-              return (
-                <button key={g.key} onClick={() => togglePick(g.key)} style={{ textAlign: "left", padding: "15px 16px", borderRadius: 16, border: `1px solid ${on ? C.gold : C.line}`, background: on ? "rgba(235,180,92,.08)" : C.panel, color: C.ivory, display: "flex", alignItems: "center", gap: 14 }}>
-                  <span style={{ width: 42, height: 42, borderRadius: 12, background: C.panel2, display: "grid", placeItems: "center", color: on ? C.gold : C.muted, flex: "0 0 auto" }}><g.Icon size={20} /></span>
-                  <span style={{ flex: 1 }}>
-                    <span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "block" }}>{g.label}</span>
-                    <span style={{ color: C.muted, fontSize: 13 }}>{g.desc}</span>
-                  </span>
-                  <span style={{ width: 24, height: 24, borderRadius: 999, border: `1.5px solid ${on ? C.gold : C.muted}`, display: "grid", placeItems: "center", background: on ? C.gold : "transparent", color: C.ink, flex: "0 0 auto" }}>{on && <Check size={15} />}</span>
-                </button>
-              );
-            })}
+        {step === 5 && <GiftStep data={data} days={days} togglePick={togglePick} set={set} />}
+        {step === 5 && (
+          <div style={{ padding: "0 24px 28px" }}>
+            <Primary onClick={onGenerate} disabled={!data.picks.length}>
+              {hasPrint && data.picks.every(isPrint) ? "Review your keepsake" : data.picks.length > 1 ? `Make ${data.picks.length} gifts` : "Make it"}
+            </Primary>
           </div>
-          <button onClick={() => { (["reel", "poem", "book"] as GiftKey[]).forEach((k) => { if (!data.picks.includes(k)) togglePick(k); }); }} style={{ background: "none", border: "none", color: C.gold, fontWeight: 600, fontSize: 13.5, marginTop: 14, alignSelf: "flex-start", padding: 4 }}>Make all three →</button>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            {([{ k: "heartfelt", t: "Heartfelt" }, { k: "romantic", t: "Romantic" }, { k: "funny", t: "Funny" }] as { k: Tone; t: string }[]).map((o) => (
-              <button key={o.k} onClick={() => set("tone", o.k)} style={{ flex: 1, padding: "9px", borderRadius: 11, border: `1px solid ${data.tone === o.k ? C.gold : C.line}`, background: data.tone === o.k ? "rgba(235,180,92,.08)" : "transparent", color: data.tone === o.k ? C.goldSoft : C.muted, fontSize: 13, fontWeight: 600 }}>{o.t}</button>
-            ))}
-          </div>
-          <Spacer /><Primary onClick={onGenerate} disabled={!data.picks.length}>{data.picks.length > 1 ? `Make ${data.picks.length} gifts` : "Make it"}</Primary>
-        </>}
+        )}
       </div>
     </div>
   );
+}
+
+/* When is the event — drives the neck-down. Computed-date holidays show read-only. */
+function DateStep({ data, set, days, dateIsFixed, occasionLabel, onNext }: {
+  data: Data; set: <K extends keyof Data>(k: K, v: Data[K]) => void;
+  days: number; dateIsFixed: boolean; occasionLabel: string; onNext: () => void;
+}) {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  return (
+    <>
+      <Eyebrow>Step 2</Eyebrow>
+      <Q>When&apos;s the big day?</Q>
+      <p style={{ color: C.muted, marginTop: -6, fontSize: 14.5 }}>
+        This decides what we can still get to you in time.
+      </p>
+
+      {dateIsFixed ? (
+        <div style={{ marginTop: 22, padding: "18px 18px", borderRadius: 16, border: `1px solid ${C.line}`, background: C.panel }}>
+          <span style={{ color: C.muted, fontSize: 13 }}>{occasionLabel} lands on</span>
+          <div style={{ fontFamily: display, fontSize: 26, fontWeight: 500, margin: "4px 0 2px" }}>{fmtDate(data.eventDate)}</div>
+          <span style={{ color: C.gold, fontSize: 13.5, fontWeight: 600 }}>{leadLabel(days)}</span>
+        </div>
+      ) : (
+        <>
+          <label style={{ display: "block", marginTop: 20 }}>
+            <span style={{ display: "block", color: C.muted, fontSize: 13, marginBottom: 7, fontWeight: 600 }}>The date</span>
+            <input type="date" value={data.eventDate} min={todayISO} onChange={(e) => set("eventDate", e.target.value)}
+              style={{ width: "100%", padding: "14px 16px", borderRadius: 14, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory, fontSize: 16 }} />
+          </label>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={() => set("eventDate", todayISO)} style={{ flex: 1, padding: "11px", borderRadius: 12, border: `1px solid ${data.eventDate === todayISO ? C.gold : C.line}`, background: data.eventDate === todayISO ? "rgba(235,180,92,.08)" : "transparent", color: data.eventDate === todayISO ? C.goldSoft : C.muted, fontSize: 13.5, fontWeight: 600 }}>It&apos;s today 😬</button>
+          </div>
+          {data.eventDate && <p style={{ color: C.gold, fontSize: 13.5, fontWeight: 600, marginTop: 12 }}>{leadLabel(days)}</p>}
+        </>
+      )}
+
+      <Spacer />
+      <Primary onClick={onNext} disabled={!data.eventDate}>Continue</Primary>
+    </>
+  );
+}
+
+/* The neck-down gift picker. Available (premium-first) up top; out-of-window items shown locked. */
+function GiftStep({ data, days, togglePick, set }: {
+  data: Data; days: number; togglePick: (k: GiftKey) => void;
+  set: <K extends keyof Data>(k: K, v: Data[K]) => void;
+}) {
+  const { available, locked } = splitByLeadTime(days);
+  return (
+    <>
+      <Eyebrow>Last step</Eyebrow><Q>Choose your gift</Q>
+      <p style={{ color: C.muted, marginTop: -6, fontSize: 14.5 }}>
+        {leadLabel(days)} — {available.length} option{available.length === 1 ? "" : "s"} we can deliver in time.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 18 }}>
+        {available.map((g) => {
+          const on = data.picks.includes(g.key);
+          return (
+            <button key={g.key} onClick={() => togglePick(g.key)} style={{ textAlign: "left", padding: "15px 16px", borderRadius: 16, border: `1px solid ${on ? C.gold : C.line}`, background: on ? "rgba(235,180,92,.08)" : C.panel, color: C.ivory, display: "flex", alignItems: "center", gap: 14 }}>
+              <span style={{ width: 42, height: 42, borderRadius: 12, background: C.panel2, display: "grid", placeItems: "center", color: on ? C.gold : C.muted, flex: "0 0 auto" }}><g.Icon size={20} /></span>
+              <span style={{ flex: 1 }}>
+                <span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>{g.label}
+                  {g.fulfillment === "print" && <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.blush, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Ships</span>}
+                </span>
+                <span style={{ color: C.muted, fontSize: 13 }}>{g.desc}</span>
+                <span style={{ color: g.fulfillment === "print" ? C.goldSoft : C.muted, fontSize: 12.5, fontWeight: 600, display: "block", marginTop: 3 }}>
+                  {g.fulfillment === "print" ? `$${(g.priceCents / 100).toFixed(0)} · ${g.shipNote}` : "Included · sent as a link"}
+                </span>
+              </span>
+              <span style={{ width: 24, height: 24, borderRadius: 999, border: `1.5px solid ${on ? C.gold : C.muted}`, display: "grid", placeItems: "center", background: on ? C.gold : "transparent", color: C.ink, flex: "0 0 auto" }}>{on && <Check size={15} />}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {locked.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <p style={{ color: C.muted, fontSize: 11.5, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", margin: "0 0 10px" }}>Needs more lead time</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {locked.map((g) => (
+              <div key={g.key} style={{ padding: "13px 16px", borderRadius: 14, border: `1px dashed ${C.line}`, background: "transparent", color: C.muted, display: "flex", alignItems: "center", gap: 14, opacity: 0.7 }}>
+                <span style={{ width: 36, height: 36, borderRadius: 10, background: C.panel, display: "grid", placeItems: "center", flex: "0 0 auto" }}><g.Icon size={17} /></span>
+                <span style={{ flex: 1 }}>
+                  <span style={{ fontFamily: display, fontSize: 17, fontWeight: 500, display: "block", color: "#C9BFD4" }}>{g.label}</span>
+                  <span style={{ fontSize: 12.5 }}>Order {g.minLeadDays}+ days ahead — we&apos;ll remind you next time</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+        {([{ k: "heartfelt", t: "Heartfelt" }, { k: "romantic", t: "Romantic" }, { k: "funny", t: "Funny" }] as { k: Tone; t: string }[]).map((o) => (
+          <button key={o.k} onClick={() => set("tone", o.k)} style={{ flex: 1, padding: "9px", borderRadius: 11, border: `1px solid ${data.tone === o.k ? C.gold : C.line}`, background: data.tone === o.k ? "rgba(235,180,92,.08)" : "transparent", color: data.tone === o.k ? C.goldSoft : C.muted, fontSize: 13, fontWeight: 600 }}>{o.t}</button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function fmtDate(iso: string): string {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return `${MONTHS[(m || 1) - 1]} ${d}, ${y}`;
 }
 
 /* ─────────────────  generating  ───────────────── */
@@ -262,25 +369,28 @@ function Generating() {
 }
 
 /* ─────────────────  preview wrapper  ───────────────── */
-function Preview({ data, story, poem, active, setActive, orderId, unlocked, onBack, onUnlock, onSend }: {
+function Preview({ data, story, poem, active, setActive, orderId, days, unlocked, onBack, onUnlock, onSend }: {
   data: Data; story: ReturnType<typeof buildStory>; poem: string[];
-  active: GiftKey; setActive: (k: GiftKey) => void; orderId: string; unlocked: boolean;
+  active: GiftKey; setActive: (k: GiftKey) => void; orderId: string; days: number; unlocked: boolean;
   onBack: () => void; onUnlock: () => void; onSend: () => void;
 }) {
   const picks: GiftKey[] = data.picks.length ? data.picks : ["reel"];
+  const digitalPicks = picks.filter((k) => !isPrint(k));
+  const activeGift = giftByKey(active);
+  const activeIsPrint = activeGift.fulfillment === "print";
   return (
     <div style={{ minHeight: "100vh", paddingBottom: 96, position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 20px 0" }}>
         <button onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: C.ivory, padding: 4 }}><ArrowLeft size={22} /></button>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: unlocked ? C.gold : C.muted }}>{unlocked ? "Unlocked" : "Preview"}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: unlocked ? C.gold : C.muted }}>{activeIsPrint ? "Keepsake" : unlocked ? "Unlocked" : "Preview"}</span>
         <span style={{ width: 22 }} />
       </div>
       {picks.length > 1 && (
-        <div style={{ display: "flex", gap: 8, padding: "16px 18px 0" }}>
+        <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", flexWrap: "wrap" }}>
           {picks.map((k) => {
             const g = giftByKey(k); const on = active === k;
             return (
-              <button key={k} onClick={() => setActive(k)} style={{ flex: 1, padding: "9px 6px", borderRadius: 12, border: `1px solid ${on ? C.gold : C.line}`, background: on ? "rgba(235,180,92,.1)" : C.panel, color: on ? C.goldSoft : C.muted, fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><g.Icon size={15} />{g.label.replace("The ", "")}</button>
+              <button key={k} onClick={() => setActive(k)} style={{ flex: "1 1 28%", padding: "9px 6px", borderRadius: 12, border: `1px solid ${on ? C.gold : C.line}`, background: on ? "rgba(235,180,92,.1)" : C.panel, color: on ? C.goldSoft : C.muted, fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}><g.Icon size={15} />{g.label.replace("The ", "")}</button>
             );
           })}
         </div>
@@ -288,16 +398,74 @@ function Preview({ data, story, poem, active, setActive, orderId, unlocked, onBa
       <div style={{ padding: "16px 16px 0" }}>
         {active === "reel" && <Reel data={data} story={story} unlocked={unlocked} />}
         {active === "poem" && <Poem data={data} poem={poem} unlocked={unlocked} />}
-        {active === "book" && <Book data={data} story={story} unlocked={unlocked} />}
+        {active === "photobook" && <Book data={data} story={story} unlocked={unlocked} />}
+        {active === "portrait" && <FramedPrint data={data} poem={poem} />}
+        {active === "collage" && <Collage data={data} />}
       </div>
 
       <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
         <div style={{ width: "100%", maxWidth: 430, padding: 16, background: `linear-gradient(180deg,transparent,${C.ink} 38%)`, pointerEvents: "auto" }}>
-          {!unlocked
-            ? <Paywall orderId={orderId} amountCents={priceFor(picks.length) * 100} picksCount={picks.length} onUnlock={onUnlock} />
-            : <button onClick={onSend} style={btnGold}>Send it →</button>}
+          {activeIsPrint ? (
+            <PrintOrder orderId={orderId} gift={activeGift} />
+          ) : digitalPicks.length === 0 ? null : !unlocked ? (
+            <Paywall orderId={orderId} amountCents={priceFor(digitalPicks.length) * 100} picksCount={digitalPicks.length} onUnlock={onUnlock} />
+          ) : (
+            <button onClick={onSend} style={btnGold}>Send it →</button>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ─────────────────  THE FRAMED PRINT (print)  ───────────────── */
+function FramedPrint({ data, poem }: { data: Data; poem: string[] }) {
+  return (
+    <div className="orx-rise">
+      <div style={{ padding: 18, borderRadius: 14, background: "linear-gradient(145deg,#1A1426,#241C32)", border: `1px solid ${C.line}` }}>
+        {/* the frame */}
+        <div style={{ borderRadius: 6, padding: 12, background: `linear-gradient(145deg,#C9A24A,#6E5320)`, boxShadow: "0 18px 40px rgba(0,0,0,.5)" }}>
+          <div style={{ borderRadius: 3, padding: "34px 24px", background: "#FBF7EE", textAlign: "center" }}>
+            <Flame size={20} />
+            {poem.slice(0, 7).map((l, i) => l === ""
+              ? <div key={i} style={{ height: 10 }} />
+              : <p key={i} style={{ fontFamily: display, fontStyle: i === 0 ? "normal" : "italic", fontSize: i === 0 ? 12 : 16, letterSpacing: i === 0 ? ".18em" : "0", textTransform: i === 0 ? "uppercase" : "none", color: i === 0 ? "#9A6A4A" : "#2A2230", margin: "3px 0", lineHeight: 1.45 }}>{l}</p>)}
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #E4DAC8", color: "#8A7E6E", fontSize: 10.5, letterSpacing: ".1em" }}>
+              {(data.name || "YOU").toUpperCase()}
+            </div>
+          </div>
+        </div>
+      </div>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
+        Printed on archival paper in a museum-grade frame, ready to hang. We print and ship it to you.
+      </p>
+    </div>
+  );
+}
+
+/* ─────────────────  THE CANVAS COLLAGE (print)  ───────────────── */
+function Collage({ data }: { data: Data }) {
+  const photos = data.photos.length ? data.photos : [null, null, null, null];
+  return (
+    <div className="orx-rise">
+      <div style={{ borderRadius: 14, padding: 10, background: "linear-gradient(145deg,#2A2238,#16111F)", border: `1px solid ${C.line}`, boxShadow: "0 18px 40px rgba(0,0,0,.5)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 6, borderRadius: 8, overflow: "hidden" }}>
+          {photos.slice(0, 4).map((p, i) => (
+            <div key={i} style={{ aspectRatio: "1", background: p ? "transparent" : `linear-gradient(${130 + i * 30}deg,#3A2A45,#1A1426)`, overflow: "hidden" }}>
+              {p
+                // eslint-disable-next-line @next/next/no-img-element
+                ? <img src={p} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                : null}
+            </div>
+          ))}
+        </div>
+        <p style={{ textAlign: "center", fontFamily: display, fontSize: 18, color: C.ivory, margin: "12px 0 4px" }}>
+          {data.pet || data.name || "Us"} · {data.eventDate ? fmtDate(data.eventDate).split(",")[0] : "Always"}
+        </p>
+      </div>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
+        Your favorite moments, printed together on gallery-wrapped canvas. We print and ship it to you.
+      </p>
     </div>
   );
 }
@@ -395,7 +563,6 @@ function Poem({ data, poem, unlocked }: { data: Data; poem: string[]; unlocked: 
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
         <SecondaryBtn icon={<Download size={17} />} label="Download print" onClick={() => window.print()} />
-        <SecondaryBtn icon={<BookOpen size={17} />} label="Order framed" href={`mailto:hello@occasionrescue.app?subject=${encodeURIComponent("Framed poem order")}&body=${encodeURIComponent(`I'd like to order a framed print of the poem for ${data.name || "my person"}.`)}`} />
       </div>
     </div>
   );
@@ -456,9 +623,6 @@ function Book({ data, story, unlocked }: { data: Data; story: ReturnType<typeof 
         {pages.map((_, i) => <span key={i} style={{ width: i === p ? 16 : 6, height: 6, borderRadius: 999, background: i === p ? C.gold : C.line, transition: "all .3s" }} />)}
       </div>
       <p style={{ textAlign: "center", color: C.muted, fontSize: 12, marginTop: 4 }}>Tap the right side to turn the page</p>
-      <div style={{ display: "flex", gap: 12, marginTop: 10 }}>
-        <SecondaryBtn icon={<BookOpen size={17} />} label="Order hardcover · ships" href={`mailto:hello@occasionrescue.app?subject=${encodeURIComponent("Hardcover book order")}&body=${encodeURIComponent(`I'd like to order the hardcover "Story of Us" book for ${data.name || "my person"}.`)}`} />
-      </div>
     </div>
   );
 }
@@ -478,7 +642,7 @@ function Done({ data, shareUrl, copied, occasionKey, orderId, onCopy, onRestart 
       <div className="orx-rise" style={{ textAlign: "center", marginTop: 12 }}>
         <div style={{ width: 64, height: 64, margin: "0 auto", borderRadius: 999, display: "grid", placeItems: "center", background: "radial-gradient(circle,rgba(235,180,92,.25),transparent 70%)" }}><Flame size={42} /></div>
         <h1 style={{ fontFamily: display, fontWeight: 500, fontSize: 34, margin: "16px 0 4px" }}>It&apos;s ready to send.</h1>
-        <p style={{ color: C.muted, fontSize: 15, margin: 0 }}>{data.picks.length > 1 ? `${data.picks.length} gifts` : "Your gift"} unlocked. Here&apos;s the private link.</p>
+        <p style={{ color: C.muted, fontSize: 15, margin: 0 }}>{data.picks.filter((k) => !isPrint(k)).length > 1 ? "Your gifts are" : "Your gift is"} unlocked. Here&apos;s the private link.{data.picks.some(isPrint) ? " Your printed keepsake is on its way." : ""}</p>
       </div>
       <div className="orx-rise" style={{ animationDelay: ".08s", marginTop: 26, padding: "14px 16px", borderRadius: 16, border: `1px solid ${C.line}`, background: C.panel, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <span style={{ fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display_link}</span>
@@ -499,7 +663,7 @@ function ReminderCard({ data, occasionKey, orderId }: { data: Data; occasionKey:
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [date, setDate] = useState("");
+  const [date, setDate] = useState(data.eventDate || "");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);

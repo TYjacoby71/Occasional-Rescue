@@ -3,7 +3,7 @@
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/service";
 import { isSupabaseConfigured } from "@/lib/config";
-import type { OccasionType, GiftTarget, ToneType } from "@/lib/database.types";
+import type { OccasionType, GiftTarget, ToneType, Json } from "@/lib/database.types";
 
 // Anonymous pre-payment flow: draft orders have user_id NULL and are written via the
 // service role (RLS can't see NULL-owner rows). When Supabase isn't configured yet, these
@@ -17,17 +17,17 @@ export async function createDraftOrder(input: {
 
   const supabase = createServiceClient();
   const { data, error } = await supabase
-    .from("orders" as never)
+    .from("orders")
     .insert({
       occasion_type: input.occasionType,
       gift_target: input.giftTarget ?? null,
       status: "draft",
-    } as never)
+    })
     .select("id")
     .single();
 
   if (error) throw new Error(`createDraftOrder failed: ${error.message}`);
-  const orderId = (data as { id: string }).id;
+  const orderId = data.id;
   await logEvent({ name: "panic_start", orderId, props: { occasion: input.occasionType } });
   return { orderId };
 }
@@ -42,12 +42,12 @@ export async function saveIntake(input: {
 
   const supabase = createServiceClient();
   const { error } = await supabase
-    .from("orders" as never)
+    .from("orders")
     .update({
-      intake: { ...input.intake, gifts: input.giftKeys },
+      intake: { ...input.intake, gifts: input.giftKeys } as Json,
       tone: input.tone,
       status: "generating",
-    } as never)
+    })
     .eq("id", input.orderId);
 
   if (error) throw new Error(`saveIntake failed: ${error.message}`);
@@ -61,9 +61,9 @@ export async function logEvent(input: {
 }): Promise<void> {
   if (!isSupabaseConfigured()) return;
   const supabase = createServiceClient();
-  await supabase.from("events" as never).insert({
+  await supabase.from("events").insert({
     name: input.name,
     order_id: input.orderId ?? null,
-    props: input.props ?? {},
-  } as never);
+    props: (input.props ?? {}) as Json,
+  });
 }

@@ -2,6 +2,9 @@ import type { NextRequest } from "next/server";
 import Stripe from "stripe";
 import { createServiceClient } from "@/lib/supabase/service";
 import { isStripeConfigured, isSupabaseConfigured } from "@/lib/config";
+import type { Database, Json } from "@/lib/database.types";
+
+type DeliverableKind = Database["public"]["Enums"]["deliverable_kind"];
 
 export const runtime = "nodejs";
 
@@ -27,33 +30,61 @@ export async function POST(req: NextRequest): Promise<Response> {
     const supabase = createServiceClient();
 
     // Idempotency: unique(source, event_id) — a duplicate insert errors and we stop.
-    const { error: dupe } = await supabase.from("webhook_events" as never).insert({
+    const { error: dupe } = await supabase.from("webhook_events").insert({
       source: "stripe",
       event_id: event.id,
       type: event.type,
-      payload: event,
-    } as never);
+      payload: event as unknown as Json,
+    });
     if (dupe) return new Response("duplicate", { status: 200 });
 
     if (event.type === "checkout.session.completed") {
       const s = event.data.object as Stripe.Checkout.Session;
       const orderId = s.metadata?.order_id;
+      const isPrint = s.metadata?.purchase === "print";
+      const intentId = typeof s.payment_intent === "string" ? s.payment_intent : null;
       if (orderId) {
         await supabase
-          .from("orders" as never)
+          .from("orders")
           .update({
             status: "paid",
             amount_cents: s.amount_total,
             paid_at: new Date().toISOString(),
-          } as never)
+          })
           .eq("id", orderId);
-        await supabase.from("payments" as never).insert({
-          order_id: orderId,
-          type: "order",
-          amount_cents: s.amount_total ?? 0,
-          status: "succeeded",
-          stripe_payment_intent_id: typeof s.payment_intent === "string" ? s.payment_intent : null,
-        } as never);
+
+        if (isPrint) {
+          // A shippable keepsake: capture the address Stripe collected so we can fulfill it,
+          // and record the print deliverable against the order.
+          const shipping = (s.collected_information?.shipping_details ?? null) as unknown as Record<string, unknown> | null;
+          const kind = (s.metadata?.kind ?? "photobook") as DeliverableKind;
+          await supabase.from("deliverables").insert({
+            order_id: orderId,
+            kind,
+            status: "paid",
+            payload: {
+              fulfillment: "print",
+              fulfillment_status: "ordered",
+              shipping,
+              customer_email: s.customer_details?.email ?? null,
+            } as Json,
+          });
+          await supabase.from("payments").insert({
+            order_id: orderId,
+            type: kind === "photobook" ? "photobook" : "order",
+            amount_cents: s.amount_total ?? 0,
+            status: "succeeded",
+            stripe_payment_intent_id: intentId,
+          });
+        } else {
+          await supabase.from("payments").insert({
+            order_id: orderId,
+            type: "order",
+            amount_cents: s.amount_total ?? 0,
+            status: "succeeded",
+            stripe_payment_intent_id: intentId,
+          });
+        }
       }
     }
   }

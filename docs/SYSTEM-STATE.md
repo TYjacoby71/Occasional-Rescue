@@ -32,13 +32,40 @@ All anonymous — no signup. One draft order carries the whole session.
 |---|---------|------|--------------|
 | 1 | Dashboard | `app/page.tsx`, `components/Dashboard.tsx` | Renders occasion tiles from a **static** list (`lib/occasions.ts`). Only **Anniversary** is active; others open a "coming soon" sheet. |
 | 2 | Occasion route | `app/[occasion]/page.tsx` | 404s any inactive occasion; else mounts `RescueFlow`. |
-| 3 | Rescue flow | `components/RescueFlow.tsx` | On mount → `createDraftOrder()` inserts `orders` row (`user_id NULL`, `status='draft'`) via the **service role** + logs `panic_start`. 5-step intake: name, photos, shared secret, "I love you because…", gift pick + tone. |
-| 4 | Generate | `lib/modules/generation.ts`, `lib/modules/intake.ts` | `saveIntake()` → `status='generating'`. `generateDeliverables()` polishes the user's fragments via the **Anthropic API** (`LLM_API_KEY`, default `claude-opus-4-8`) into a "Story of Us", with a deterministic template fallback. Persists to `deliverables` (`status='preview'`). |
-| 5 | Preview + paywall | `components/Paywall.tsx`, `lib/modules/payment.ts` | Watermarked preview. Pricing $24/$34/$42 for 1/2/3 gifts. **Dev/no-Stripe** → `markOrderPaidDev()` flips order to `paid`, writes `payments` (`dev_bypass`). **Stripe** → Checkout with `setup_future_usage: off_session` (saves card + reorder consent); the webhook flips the order. |
-| 6 | Done | `components/RescueFlow.tsx` (`Done`) | Shows a shareable link + a "remind me next year" toggle. |
+| 3 | Rescue flow | `components/RescueFlow.tsx` | On mount → `createDraftOrder()` inserts `orders` row (`user_id NULL`, `status='draft'`) via the **service role** + logs `panic_start`. **6-step intake**: who → **when (event date)** → photos → shared secret → "I love you because…" → gift pick + tone. The date step drives the **neck-down** (see below). |
+| 4 | Generate | `lib/modules/generation.ts`, `lib/modules/intake.ts` | `saveIntake()` (now also stores `event_date` + `days_until` in `intake`) → `status='generating'`. `generateDeliverables()` synthesizes only the **digital** picks (reel/poem) via the **Anthropic API** (`LLM_API_KEY`, default `claude-opus-4-8`) into a "Story of Us", with a template fallback. Persists to `deliverables` (`status='preview'`). |
+| 5 | Preview + paywall | `components/Paywall.tsx`, `components/PrintOrder.tsx`, `lib/modules/payment.ts` | Tabbed preview per pick. **Digital** picks gate behind the send-paywall ($24/$34/$42 for 1/2/3); **print** picks each show an `Order & ship · $X` CTA. Dev/no-Stripe bypasses; Stripe digital → Checkout w/ `setup_future_usage`; Stripe print → Checkout w/ `shipping_address_collection`. |
+| 6 | Done | `components/RescueFlow.tsx` (`Done`) | Shareable link + "remind me next year" (date prefilled from intake). Notes when a printed keepsake is shipping. |
 
 **Payments webhook** (`app/api/webhooks/stripe/route.ts`): on `checkout.session.completed`,
-marks the order `paid` and writes a `payments` row. Idempotent via `webhook_events(source, event_id)`.
+marks the order `paid` and writes a `payments` row. For `metadata.purchase=print` it also records
+the print `deliverable` (kind + `fulfillment_status`) and captures the **shipping address** Stripe
+collected, for fulfillment. Idempotent via `webhook_events(source, event_id)`.
+
+---
+
+## Time-tiered deliverables (the neck-down)
+
+The catalog (`lib/gifts.ts`) is split by **fulfillment** and **lead time**:
+
+| Gift | Kind | Fulfillment | Min lead | Price |
+|------|------|-------------|----------|-------|
+| The Keepsake Book | `photobook` | print (ships) | 21 days | $89 |
+| The Framed Print | `portrait` | print (ships) | 14 days | $69 |
+| The Canvas Collage | `collage` | print (ships) | 10 days | $59 |
+| The Reel | `reel` | digital | 0 | bundle |
+| The Poem | `poem` | digital | 0 | bundle |
+
+`lib/occasion/lead-time.ts` turns the event date into days of runway (`daysUntil`); computed-date
+holidays (Valentine's, Mother's/Father's Day) derive the date from `date_rule` and show it
+read-only, while `user` occasions ask for it. `splitByLeadTime(days)` then partitions the catalog:
+**available** (premium-first) renders as selectable; **locked** renders greyed with an "order N+
+days ahead" nudge. So 3-weeks-out surfaces the full premium print tier; day-of necks down to the
+two instant digital options. Digital is synthesized + shared via the microsite; print is a real
+Stripe order with shipping, recorded for concierge fulfillment.
+
+> Known edge: a **print-only** selection (no digital pick) completes at the inline "order placed"
+> confirmation — it has no share link (nothing digital to send) and no dedicated done screen yet.
 
 **Analytics**: the `events` table logs `panic_start → intake_complete → generated → paid → shared`.
 

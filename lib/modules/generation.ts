@@ -13,11 +13,12 @@ import { isSupabaseConfigured } from "@/lib/config";
 type Fragments = { name: string; pet: string; secret: string; reason: string };
 type Story = { eyebrow: string; headline: string; body: string };
 
-// gift key -> deliverable_kind
-const KIND: Record<string, "reel" | "poem" | "photobook"> = {
+// gift key -> deliverable_kind. Only the digital deliverables are generated here; print
+// keepsakes (photobook/portrait/collage) are real shippable orders handled by the print
+// checkout, not synthesized previews.
+const KIND: Record<string, "reel" | "poem"> = {
   reel: "reel",
   poem: "poem",
-  book: "photobook",
 };
 
 const SYSTEM = `You polish anniversary notes. The human supplies the soul; you only arrange and lightly polish THEIR real fragments.
@@ -88,10 +89,10 @@ async function persist(orderId: string, giftKeys: string[], story: Story, poem: 
   const rows = keys.map((k) => ({
     order_id: orderId,
     kind: KIND[k] ?? "reel",
-    status: "preview",
+    status: "preview" as const,
     payload: k === "poem" ? { poem } : { headline: story.headline, body: story.body },
   }));
-  await supabase.from("deliverables" as never).insert(rows as never);
+  await supabase.from("deliverables").insert(rows);
 }
 
 export async function generateDeliverables(input: {
