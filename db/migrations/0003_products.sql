@@ -34,16 +34,16 @@ create policy products_public_read on products for select using (active);
 -- Supplier SKUs are Prodigi global placeholders; confirm against the live Prodigi catalog before
 -- enabling auto-fulfillment. Prices are retail (what the buyer pays).
 insert into products (slug, name, blurb, fulfillment, deliverable_kind, supplier, supplier_sku, price_cents, min_lead_days, ship_note, display_order) values
-  -- Premium keepsakes (need runway) ──────────────────────────────────────────────
+  -- Personalized keepsakes — worth the wait (~10–30d) ─────────────────────────────
   ('photobook', 'The Keepsake Book',  'A premium hardcover photo book — your story, printed and bound',      'print',   'photobook', 'prodigi', 'GLOBAL-PHO-BOOK-A4P', 8900, 14, 'Ships in ~10 days', 10),
-  ('starmap',   'The Star Map',       'The night sky exactly as it was — your date, your place',             'print',   'physical',  'prodigi', 'GLOBAL-FAP-16X24',    6900, 10, 'Ships in ~7 days',  20),
-  ('portrait',  'The Framed Print',   'Your words set in a museum-grade frame, ready to hang',               'print',   'portrait',  'prodigi', 'GLOBAL-FAP-12X16',    6900, 10, 'Ships in ~7 days',  30),
-  ('collage',   'The Canvas Collage', 'Your favorite moments, printed together on gallery canvas',           'print',   'collage',   'prodigi', 'GLOBAL-CAN-16X20',    5900, 10, 'Ships in ~7 days',  40),
-  -- Fast drop-ship (3–7d) ────────────────────────────────────────────────────────
+  ('starmap',   'The Star Map',       'The night sky exactly as it was — your date, your place',             'print',   'physical',  'prodigi', 'GLOBAL-FAP-16X24',    6900, 12, 'Ships in ~9 days',  20),
+  ('collage',   'The Canvas Collage', 'Your favorite moments, printed together on gallery canvas',           'print',   'collage',   'prodigi', 'GLOBAL-CAN-16X20',    5900, 10, 'Ships in ~7 days',  30),
+  -- Quick off-the-shelf print (5–10d) ─────────────────────────────────────────────
+  ('portrait',  'The Framed Print',   'Your words set in a museum-grade frame, ready to hang',               'print',   'portrait',  'prodigi', 'GLOBAL-FAP-12X16',    6900,  7, 'Ships in ~5 days',  40),
   ('mug',       'The Mug',            '“Reasons I love you,” in their hands every morning',                  'print',   'physical',  'prodigi', 'GLOBAL-MUG-11OZ',     2900,  7, 'Ships in ~5 days',  50),
   ('card',      'The Card',           'A premium greeting card — written by you, mailed to them',            'print',   'physical',  'prodigi', 'GLOBAL-GRE-A5',       1200,  5, 'Ships in ~4 days',  60),
-  -- Instant rescue (0–2d, digital) ───────────────────────────────────────────────
-  ('experience','The Experience',     'A dinner, a spa day, a night out — emailed as a voucher',             'digital', 'giftcard',  'tremendous', null,             7500,  2, 'Emailed instantly', 70),
+  -- Imminent — digital, done the moment you finish (lead 0) ───────────────────────
+  ('experience','The Experience',     'A dinner, a spa day, a night out — emailed as a voucher',             'digital', 'giftcard',  'tremendous', null,             7500,  0, 'Emailed instantly', 70),
   ('giftcard',  'The Gift Card',      'A gift card to their favorite place — in their inbox in seconds',     'digital', 'giftcard',  'tremendous', null,             5000,  0, 'Emailed instantly', 80),
   ('reel',      'The Reel',           'Your photos, set to music — sent as a link',                          'digital', 'reel',      null,         null,             2400,  0, 'Sent as a link',    90),
-  ('poem',      'The Poem',           'Written for them — share it, or print it at home',                    'digital', 'poem',      null,         null,             2400,  0, 'Sent as a link',   100);
+  ('poem',      'The Poem',           'Written for them — free to try, then unlock to send',                 'digital', 'poem',      null,         null,             2400,  0, 'Sent as a link',   100);

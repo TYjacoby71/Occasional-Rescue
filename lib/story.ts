@@ -57,21 +57,58 @@ export function buildStory({ name, pet, secret, reason, tone }: StoryInput) {
   };
 }
 
-export function buildPoem({ name, pet, secret, reason }: Omit<StoryInput, "tone">): string[] {
+// The Poem is the free-to-try hook: one generation + one free rework, then it locks. `variant`
+// selects between distinct phrasings so a rework reads as a genuinely different poem even without
+// an LLM (dev/offline). Paying unlocks unlimited reworks (and sending).
+export function buildPoem(
+  { name, pet, secret, reason }: Omit<StoryInput, "tone">,
+  variant = 0,
+): string[] {
   const who = cap(pet || name || "you");
   const sec = secret && secret.trim() ? cap(lc(secret)) : "The ordinary mornings";
   const rea = reason && reason.trim() ? lc(reason) : "you make the noise of the world go quiet";
-  return [
-    `For ${who} —`,
-    "",
-    `Not for the grand days do I love you most,`,
-    `but for the small, unwitnessed kind:`,
-    `${sec},`,
-    `the jokes that need no telling, the half-said line.`,
-    "",
-    `I love you because ${rea},`,
-    `and still, after all the years,`,
-    `the door swings open and my chest goes light —`,
-    `still you, still here, still ours.`,
+
+  const variants: string[][] = [
+    [
+      `For ${who} —`,
+      "",
+      `Not for the grand days do I love you most,`,
+      `but for the small, unwitnessed kind:`,
+      `${sec},`,
+      `the jokes that need no telling, the half-said line.`,
+      "",
+      `I love you because ${rea},`,
+      `and still, after all the years,`,
+      `the door swings open and my chest goes light —`,
+      `still you, still here, still ours.`,
+    ],
+    [
+      `To ${who},`,
+      "",
+      `If I had to name it, I'd start here:`,
+      `${sec.toLowerCase().startsWith("the") ? sec.charAt(0).toLowerCase() + sec.slice(1) : lc(sec)},`,
+      `the quiet between the words we never finish.`,
+      "",
+      `${cap(rea)} —`,
+      `that is the reason, and it is enough.`,
+      `Of all the lives I could have wandered into,`,
+      `I'm grateful, every day, it was yours.`,
+    ],
+    [
+      `${who}, this is for you —`,
+      "",
+      `Let the world keep its fireworks.`,
+      `Give me ${lc(sec)},`,
+      `the unremarkable Tuesdays that turned out to be everything.`,
+      "",
+      `I love you because ${rea},`,
+      `and I would choose it all again:`,
+      `the same door, the same light,`,
+      `the same you, waiting on the other side.`,
+    ],
   ];
+  return variants[((variant % variants.length) + variants.length) % variants.length];
 }
+
+// How many free reworks the unpaid Poem allows before it locks (1 generation + this many reworks).
+export const FREE_POEM_REWORKS = 1;

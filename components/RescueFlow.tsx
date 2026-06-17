@@ -4,12 +4,12 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Copy, Check, Bell, MessageCircle, Mail, ImagePlus, X,
-  Play, Pause, Download, Gift as GiftIcon, Ticket,
+  Play, Pause, Download, Gift as GiftIcon, Ticket, RefreshCw, Lock,
 } from "lucide-react";
 import { C, display, ui, btnGold } from "@/lib/theme";
 import { priceFor } from "@/lib/config";
-import { buildStory, buildPoem, lc, cap, type Tone } from "@/lib/story";
-import { GIFTS, giftByKey, isPrint, needsCheckout, splitByLeadTime, type GiftKey } from "@/lib/gifts";
+import { buildStory, buildPoem, FREE_POEM_REWORKS, lc, cap, type Tone } from "@/lib/story";
+import { GIFTS, TIERS, giftByKey, giftsByTier, isAvailable, isPrint, needsCheckout, type GiftKey } from "@/lib/gifts";
 import { daysUntil, computedEventDate, leadLabel } from "@/lib/occasion/lead-time";
 import { Flame } from "@/components/Flame";
 import { Paywall } from "@/components/Paywall";
@@ -39,6 +39,8 @@ export function RescueFlow({ occasion }: { occasion: Occasion }) {
   });
   const [story, setStory] = useState<ReturnType<typeof buildStory> | null>(null);
   const [poem, setPoem] = useState<string[] | null>(null);
+  const [poemVariant, setPoemVariant] = useState(0); // which phrasing is showing
+  const [poemReworks, setPoemReworks] = useState(0); // free reworks spent before the paywall
   const [active, setActive] = useState<GiftKey>("reel");
   const [unlocked, setUnlocked] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -114,10 +116,23 @@ export function RescueFlow({ occasion }: { occasion: Occasion }) {
 
     setStory(res.story);
     setPoem(res.poem);
+    setPoemVariant(0);
+    setPoemReworks(0);
     setActive(data.picks[0] || "reel");
     setUnlocked(false);
     setScreen("preview");
     void logEvent({ name: "generated", orderId: orderId.current ?? undefined });
+  }
+
+  // The Poem is the free-to-try hook: 1 free rework, then it locks until the digital bundle is
+  // paid. Paying (unlocked) lifts the cap. Reworks regenerate locally so they're instant.
+  function reworkPoem() {
+    if (!unlocked && poemReworks >= FREE_POEM_REWORKS) return; // locked — paywall takes over
+    const next = poemVariant + 1;
+    setPoemVariant(next);
+    setPoem(buildPoem(data, next));
+    if (!unlocked) setPoemReworks((n) => n + 1);
+    void logEvent({ name: "poem_reworked", orderId: orderId.current ?? undefined });
   }
 
   // Publish the share microsite (persist an unguessable slug + token, flip to delivered),
@@ -150,6 +165,7 @@ export function RescueFlow({ occasion }: { occasion: Occasion }) {
         <Preview
           data={data} story={story} poem={poem} active={active} setActive={setActive}
           orderId={orderId.current ?? ""} days={days}
+          onRework={reworkPoem} reworksLeft={Math.max(0, FREE_POEM_REWORKS - poemReworks)}
           unlocked={unlocked} onBack={() => setScreen("intake")}
           onUnlock={() => { setUnlocked(true); void logEvent({ name: "paid", orderId: orderId.current ?? undefined }); }}
           onSend={handleSend}
@@ -291,54 +307,67 @@ function GiftStep({ data, days, togglePick, set }: {
   data: Data; days: number; togglePick: (k: GiftKey) => void;
   set: <K extends keyof Data>(k: K, v: Data[K]) => void;
 }) {
-  const { available, locked } = splitByLeadTime(days);
+  const availableCount = GIFTS.filter((g) => isAvailable(g.key, days)).length;
   return (
     <>
       <Eyebrow>Last step</Eyebrow><Q>Choose your gift</Q>
       <p style={{ color: C.muted, marginTop: -6, fontSize: 14.5 }}>
-        {leadLabel(days)} — {available.length} option{available.length === 1 ? "" : "s"} we can deliver in time.
+        {leadLabel(days)} — {availableCount} option{availableCount === 1 ? "" : "s"} we can deliver in time.
       </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 18 }}>
-        {available.map((g) => {
-          const on = data.picks.includes(g.key);
-          return (
-            <button key={g.key} onClick={() => togglePick(g.key)} style={{ textAlign: "left", padding: "15px 16px", borderRadius: 16, border: `1px solid ${on ? C.gold : C.line}`, background: on ? "rgba(235,180,92,.08)" : C.panel, color: C.ivory, display: "flex", alignItems: "center", gap: 14 }}>
-              <span style={{ width: 42, height: 42, borderRadius: 12, background: C.panel2, display: "grid", placeItems: "center", color: on ? C.gold : C.muted, flex: "0 0 auto" }}><g.Icon size={20} /></span>
-              <span style={{ flex: 1 }}>
-                <span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>{g.label}
-                  {g.fulfillment === "print"
-                    ? <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.blush, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Ships</span>
-                    : g.checkout === "order" && <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.goldSoft, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Instant</span>}
-                </span>
-                <span style={{ color: C.muted, fontSize: 13 }}>{g.desc}</span>
-                <span style={{ color: g.checkout === "order" ? C.goldSoft : C.muted, fontSize: 12.5, fontWeight: 600, display: "block", marginTop: 3 }}>
-                  {g.checkout === "order" ? `$${(g.priceCents / 100).toFixed(0)} · ${g.shipNote}` : "Included · sent as a link"}
-                </span>
-              </span>
-              <span style={{ width: 24, height: 24, borderRadius: 999, border: `1.5px solid ${on ? C.gold : C.muted}`, display: "grid", placeItems: "center", background: on ? C.gold : "transparent", color: C.ink, flex: "0 0 auto" }}>{on && <Check size={15} />}</span>
-            </button>
-          );
-        })}
-      </div>
 
-      {locked.length > 0 && (
-        <div style={{ marginTop: 20 }}>
-          <p style={{ color: C.muted, fontSize: 11.5, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", margin: "0 0 10px" }}>Needs more lead time</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {locked.map((g) => (
-              <div key={g.key} style={{ padding: "13px 16px", borderRadius: 14, border: `1px dashed ${C.line}`, background: "transparent", color: C.muted, display: "flex", alignItems: "center", gap: 14, opacity: 0.7 }}>
-                <span style={{ width: 36, height: 36, borderRadius: 10, background: C.panel, display: "grid", placeItems: "center", flex: "0 0 auto" }}><g.Icon size={17} /></span>
-                <span style={{ flex: 1 }}>
-                  <span style={{ fontFamily: display, fontSize: 17, fontWeight: 500, display: "block", color: "#C9BFD4" }}>{g.label}</span>
-                  <span style={{ fontSize: 12.5 }}>Order {g.minLeadDays}+ days ahead — we&apos;ll remind you next time</span>
-                </span>
-              </div>
-            ))}
+      {TIERS.map((tier) => {
+        const items = giftsByTier(tier.key);
+        if (items.length === 0) return null;
+        const anyAvailable = items.some((g) => isAvailable(g.key, days));
+        return (
+          <div key={tier.key} style={{ marginTop: 22, opacity: anyAvailable ? 1 : 0.85 }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", margin: "0 0 10px" }}>
+              <span style={{ color: anyAvailable ? C.goldSoft : C.muted, fontSize: 12, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase" }}>{tier.label}</span>
+              <span style={{ color: C.muted, fontSize: 11.5 }}>{tier.blurb}</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {items.map((g) => {
+                const inTime = isAvailable(g.key, days);
+                const on = data.picks.includes(g.key);
+                if (!inTime) {
+                  return (
+                    <div key={g.key} style={{ padding: "13px 16px", borderRadius: 14, border: `1px dashed ${C.line}`, background: "transparent", color: C.muted, display: "flex", alignItems: "center", gap: 14, opacity: 0.7 }}>
+                      <span style={{ width: 36, height: 36, borderRadius: 10, background: C.panel, display: "grid", placeItems: "center", flex: "0 0 auto" }}><g.Icon size={17} /></span>
+                      <span style={{ flex: 1 }}>
+                        <span style={{ fontFamily: display, fontSize: 17, fontWeight: 500, display: "block", color: "#C9BFD4" }}>{g.label}</span>
+                        <span style={{ fontSize: 12.5 }}>Order {g.minLeadDays}+ days ahead — we&apos;ll remind you next time</span>
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <button key={g.key} onClick={() => togglePick(g.key)} style={{ textAlign: "left", padding: "15px 16px", borderRadius: 16, border: `1px solid ${on ? C.gold : C.line}`, background: on ? "rgba(235,180,92,.08)" : C.panel, color: C.ivory, display: "flex", alignItems: "center", gap: 14 }}>
+                    <span style={{ width: 42, height: 42, borderRadius: 12, background: C.panel2, display: "grid", placeItems: "center", color: on ? C.gold : C.muted, flex: "0 0 auto" }}><g.Icon size={20} /></span>
+                    <span style={{ flex: 1 }}>
+                      <span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>{g.label}
+                        {g.fulfillment === "print"
+                          ? <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.blush, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Ships</span>
+                          : g.key === "poem"
+                            ? <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.gold, border: `1px solid ${C.gold}`, borderRadius: 999, padding: "2px 7px" }}>Free to try</span>
+                            : g.checkout === "order" && <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.goldSoft, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Instant</span>}
+                      </span>
+                      <span style={{ color: C.muted, fontSize: 13 }}>{g.desc}</span>
+                      <span style={{ color: g.checkout === "order" ? C.goldSoft : C.muted, fontSize: 12.5, fontWeight: 600, display: "block", marginTop: 3 }}>
+                        {g.checkout === "order"
+                          ? `$${(g.priceCents / 100).toFixed(0)} · ${g.shipNote}`
+                          : g.key === "poem" ? "Free preview + 1 rework · unlock to send" : "Included · sent as a link"}
+                      </span>
+                    </span>
+                    <span style={{ width: 24, height: 24, borderRadius: 999, border: `1.5px solid ${on ? C.gold : C.muted}`, display: "grid", placeItems: "center", background: on ? C.gold : "transparent", color: C.ink, flex: "0 0 auto" }}>{on && <Check size={15} />}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 22 }}>
         {([{ k: "heartfelt", t: "Heartfelt" }, { k: "romantic", t: "Romantic" }, { k: "funny", t: "Funny" }] as { k: Tone; t: string }[]).map((o) => (
           <button key={o.k} onClick={() => set("tone", o.k)} style={{ flex: 1, padding: "9px", borderRadius: 11, border: `1px solid ${data.tone === o.k ? C.gold : C.line}`, background: data.tone === o.k ? "rgba(235,180,92,.08)" : "transparent", color: data.tone === o.k ? C.goldSoft : C.muted, fontSize: 13, fontWeight: 600 }}>{o.t}</button>
         ))}
@@ -373,9 +402,10 @@ function Generating() {
 }
 
 /* ─────────────────  preview wrapper  ───────────────── */
-function Preview({ data, story, poem, active, setActive, orderId, days, unlocked, onBack, onUnlock, onSend }: {
+function Preview({ data, story, poem, active, setActive, orderId, days, onRework, reworksLeft, unlocked, onBack, onUnlock, onSend }: {
   data: Data; story: ReturnType<typeof buildStory>; poem: string[];
   active: GiftKey; setActive: (k: GiftKey) => void; orderId: string; days: number; unlocked: boolean;
+  onRework: () => void; reworksLeft: number;
   onBack: () => void; onUnlock: () => void; onSend: () => void;
 }) {
   const picks: GiftKey[] = data.picks.length ? data.picks : ["reel"];
@@ -402,7 +432,7 @@ function Preview({ data, story, poem, active, setActive, orderId, days, unlocked
       )}
       <div style={{ padding: "16px 16px 0" }}>
         {active === "reel" && <Reel data={data} story={story} unlocked={unlocked} />}
-        {active === "poem" && <Poem data={data} poem={poem} unlocked={unlocked} />}
+        {active === "poem" && <Poem data={data} poem={poem} unlocked={unlocked} onRework={onRework} reworksLeft={reworksLeft} onUnlock={onUnlock} />}
         {active === "photobook" && <Book data={data} story={story} unlocked={unlocked} />}
         {active === "portrait" && <FramedPrint data={data} poem={poem} />}
         {active === "collage" && <Collage data={data} />}
@@ -658,7 +688,13 @@ function Reel({ data, story, unlocked }: { data: Data; story: ReturnType<typeof 
 }
 
 /* ─────────────────  THE POEM  ───────────────── */
-function Poem({ data, poem, unlocked }: { data: Data; poem: string[]; unlocked: boolean }) {
+function Poem({ data, poem, unlocked, onRework, reworksLeft, onUnlock }: {
+  data: Data; poem: string[]; unlocked: boolean;
+  onRework: () => void; reworksLeft: number; onUnlock: () => void;
+}) {
+  // Free-to-try: one rework on the house, then the button locks and points at the paywall.
+  // Paying (unlocked) lifts the cap entirely.
+  const canRework = unlocked || reworksLeft > 0;
   return (
     <div className="orx-rise">
       <div style={{ position: "relative", borderRadius: 18, padding: 8, background: `linear-gradient(145deg,${C.gold},#8A6A2E)` }}>
@@ -675,7 +711,17 @@ function Poem({ data, poem, unlocked }: { data: Data; poem: string[]; unlocked: 
           </div>
         </div>
       </div>
-      <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
+      {canRework ? (
+        <button onClick={onRework} style={{ fontFamily: ui, width: "100%", marginTop: 14, padding: "12px", borderRadius: 12, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600 }}>
+          <RefreshCw size={16} /> Try another version
+          {!unlocked && <span style={{ color: C.muted, fontWeight: 500 }}>· {reworksLeft} free left</span>}
+        </button>
+      ) : (
+        <button onClick={onUnlock} style={{ fontFamily: ui, width: "100%", marginTop: 14, padding: "12px", borderRadius: 12, border: `1px solid ${C.gold}`, background: "rgba(235,180,92,.08)", color: C.goldSoft, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 14, fontWeight: 600 }}>
+          <Lock size={15} /> Unlock to rework &amp; send
+        </button>
+      )}
+      <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
         <SecondaryBtn icon={<Download size={17} />} label="Download print" onClick={() => window.print()} />
       </div>
     </div>
