@@ -403,6 +403,57 @@ export type Database = {
           },
         ]
       }
+      products: {
+        Row: {
+          active: boolean
+          blurb: string
+          created_at: string
+          deliverable_kind: Database["public"]["Enums"]["deliverable_kind"]
+          display_order: number
+          fulfillment: string
+          id: string
+          min_lead_days: number
+          name: string
+          price_cents: number
+          ship_note: string | null
+          slug: string
+          supplier: string | null
+          supplier_sku: string | null
+        }
+        Insert: {
+          active?: boolean
+          blurb?: string
+          created_at?: string
+          deliverable_kind?: Database["public"]["Enums"]["deliverable_kind"]
+          display_order?: number
+          fulfillment: string
+          id?: string
+          min_lead_days?: number
+          name: string
+          price_cents: number
+          ship_note?: string | null
+          slug: string
+          supplier?: string | null
+          supplier_sku?: string | null
+        }
+        Update: {
+          active?: boolean
+          blurb?: string
+          created_at?: string
+          deliverable_kind?: Database["public"]["Enums"]["deliverable_kind"]
+          display_order?: number
+          fulfillment?: string
+          id?: string
+          min_lead_days?: number
+          name?: string
+          price_cents?: number
+          ship_note?: string | null
+          slug?: string
+          supplier?: string | null
+          supplier_sku?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -628,6 +679,8 @@ export type Database = {
         | "collage"
         | "song"
         | "portrait"
+        | "physical"
+        | "giftcard"
       gift_target: "spouse" | "parent" | "other"
       occasion_type:
         | "anniversary"
@@ -797,6 +850,8 @@ export const Constants = {
         "collage",
         "song",
         "portrait",
+        "physical",
+        "giftcard",
       ],
       gift_target: ["spouse", "parent", "other"],
       occasion_type: [
@@ -852,3 +907,4 @@ export type ChannelType = Database["public"]["Enums"]["channel_type"]
 export type SchedStatus = Database["public"]["Enums"]["sched_status"]
 export type PaymentType = Database["public"]["Enums"]["payment_type"]
 export type OccasionConfigRow = Database["public"]["Tables"]["occasion_config"]["Row"]
+export type ProductRow = Database["public"]["Tables"]["products"]["Row"]

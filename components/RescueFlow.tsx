@@ -4,12 +4,12 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Copy, Check, Bell, MessageCircle, Mail, ImagePlus, X,
-  Play, Pause, Download,
+  Play, Pause, Download, Gift as GiftIcon, Ticket,
 } from "lucide-react";
 import { C, display, ui, btnGold } from "@/lib/theme";
 import { priceFor } from "@/lib/config";
 import { buildStory, buildPoem, lc, cap, type Tone } from "@/lib/story";
-import { GIFTS, giftByKey, isPrint, splitByLeadTime, type GiftKey } from "@/lib/gifts";
+import { GIFTS, giftByKey, isPrint, needsCheckout, splitByLeadTime, type GiftKey } from "@/lib/gifts";
 import { daysUntil, computedEventDate, leadLabel } from "@/lib/occasion/lead-time";
 import { Flame } from "@/components/Flame";
 import { Paywall } from "@/components/Paywall";
@@ -87,7 +87,9 @@ export function RescueFlow({ occasion }: { occasion: Occasion }) {
 
   async function generate() {
     setScreen("gen");
-    const digitalPicks = data.picks.filter((k) => !isPrint(k));
+    // Only the digital BUNDLE picks (reel/poem) are synthesized + ride the combo paywall. Commerce
+    // items (gift card / experience) and print keepsakes are their own single-item orders.
+    const digitalPicks = data.picks.filter((k) => !needsCheckout(k));
     void saveIntake({
       orderId: orderId.current ?? "",
       intake: {
@@ -304,11 +306,13 @@ function GiftStep({ data, days, togglePick, set }: {
               <span style={{ width: 42, height: 42, borderRadius: 12, background: C.panel2, display: "grid", placeItems: "center", color: on ? C.gold : C.muted, flex: "0 0 auto" }}><g.Icon size={20} /></span>
               <span style={{ flex: 1 }}>
                 <span style={{ fontFamily: display, fontSize: 21, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>{g.label}
-                  {g.fulfillment === "print" && <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.blush, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Ships</span>}
+                  {g.fulfillment === "print"
+                    ? <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.blush, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Ships</span>
+                    : g.checkout === "order" && <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.goldSoft, border: `1px solid ${C.line}`, borderRadius: 999, padding: "2px 7px" }}>Instant</span>}
                 </span>
                 <span style={{ color: C.muted, fontSize: 13 }}>{g.desc}</span>
-                <span style={{ color: g.fulfillment === "print" ? C.goldSoft : C.muted, fontSize: 12.5, fontWeight: 600, display: "block", marginTop: 3 }}>
-                  {g.fulfillment === "print" ? `$${(g.priceCents / 100).toFixed(0)} · ${g.shipNote}` : "Included · sent as a link"}
+                <span style={{ color: g.checkout === "order" ? C.goldSoft : C.muted, fontSize: 12.5, fontWeight: 600, display: "block", marginTop: 3 }}>
+                  {g.checkout === "order" ? `$${(g.priceCents / 100).toFixed(0)} · ${g.shipNote}` : "Included · sent as a link"}
                 </span>
               </span>
               <span style={{ width: 24, height: 24, borderRadius: 999, border: `1.5px solid ${on ? C.gold : C.muted}`, display: "grid", placeItems: "center", background: on ? C.gold : "transparent", color: C.ink, flex: "0 0 auto" }}>{on && <Check size={15} />}</span>
@@ -375,14 +379,15 @@ function Preview({ data, story, poem, active, setActive, orderId, days, unlocked
   onBack: () => void; onUnlock: () => void; onSend: () => void;
 }) {
   const picks: GiftKey[] = data.picks.length ? data.picks : ["reel"];
-  const digitalPicks = picks.filter((k) => !isPrint(k));
+  const digitalPicks = picks.filter((k) => !needsCheckout(k));
   const activeGift = giftByKey(active);
-  const activeIsPrint = activeGift.fulfillment === "print";
+  const activeNeedsCheckout = needsCheckout(active); // own charge (print keepsake or commerce gift)
+  const activeLabel = activeNeedsCheckout ? (activeGift.fulfillment === "print" ? "Keepsake" : "Gift") : unlocked ? "Unlocked" : "Preview";
   return (
     <div style={{ minHeight: "100vh", paddingBottom: 96, position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 20px 0" }}>
         <button onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: C.ivory, padding: 4 }}><ArrowLeft size={22} /></button>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: unlocked ? C.gold : C.muted }}>{activeIsPrint ? "Keepsake" : unlocked ? "Unlocked" : "Preview"}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", color: unlocked ? C.gold : C.muted }}>{activeLabel}</span>
         <span style={{ width: 22 }} />
       </div>
       {picks.length > 1 && (
@@ -401,12 +406,17 @@ function Preview({ data, story, poem, active, setActive, orderId, days, unlocked
         {active === "photobook" && <Book data={data} story={story} unlocked={unlocked} />}
         {active === "portrait" && <FramedPrint data={data} poem={poem} />}
         {active === "collage" && <Collage data={data} />}
+        {active === "starmap" && <StarMap data={data} />}
+        {active === "mug" && <Mug data={data} />}
+        {active === "card" && <Card data={data} poem={poem} />}
+        {active === "giftcard" && <Voucher data={data} gift={giftByKey("giftcard")} />}
+        {active === "experience" && <Voucher data={data} gift={giftByKey("experience")} />}
       </div>
 
       <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
         <div style={{ width: "100%", maxWidth: 430, padding: 16, background: `linear-gradient(180deg,transparent,${C.ink} 38%)`, pointerEvents: "auto" }}>
-          {activeIsPrint ? (
-            <PrintOrder orderId={orderId} gift={activeGift} />
+          {activeNeedsCheckout ? (
+            <PrintOrder orderId={orderId} gift={activeGift} days={days} />
           ) : digitalPicks.length === 0 ? null : !unlocked ? (
             <Paywall orderId={orderId} amountCents={priceFor(digitalPicks.length) * 100} picksCount={digitalPicks.length} onUnlock={onUnlock} />
           ) : (
@@ -465,6 +475,110 @@ function Collage({ data }: { data: Data }) {
       </div>
       <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
         Your favorite moments, printed together on gallery-wrapped canvas. We print and ship it to you.
+      </p>
+    </div>
+  );
+}
+
+/* ─────────────────  THE STAR MAP (print)  ───────────────── */
+function StarMap({ data }: { data: Data }) {
+  // A deterministic sprinkle of stars so the same render is stable across paints.
+  const stars = Array.from({ length: 46 }, (_, i) => {
+    const a = (i * 139.5) % 360, r = 6 + ((i * 53) % 78);
+    const cx = 50 + Math.cos((a * Math.PI) / 180) * (r / 1.7);
+    const cy = 50 + Math.sin((a * Math.PI) / 180) * (r / 1.7);
+    return { cx, cy, rad: 0.4 + ((i * 7) % 10) / 9 };
+  });
+  return (
+    <div className="orx-rise">
+      <div style={{ borderRadius: 14, padding: 16, background: "linear-gradient(145deg,#1A1426,#241C32)", border: `1px solid ${C.line}`, boxShadow: "0 18px 40px rgba(0,0,0,.5)" }}>
+        <div style={{ position: "relative", width: "100%", aspectRatio: "1", borderRadius: "50%", overflow: "hidden", background: "radial-gradient(circle at 50% 38%,#10203A,#070B16 72%)", border: "4px solid #0C1120" }}>
+          <svg viewBox="0 0 100 100" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+            {stars.map((s, i) => <circle key={i} cx={s.cx} cy={s.cy} r={s.rad} fill="#EAF2FF" opacity={0.5 + (i % 5) / 10} />)}
+            <path d="M30 40 L42 46 L50 38 L62 50 L70 44" stroke="#9FB8E8" strokeWidth="0.4" fill="none" opacity="0.7" />
+          </svg>
+        </div>
+        <p style={{ textAlign: "center", fontFamily: display, fontSize: 19, color: C.ivory, margin: "16px 0 2px" }}>
+          {data.name ? `${cap(data.pet || data.name)} & You` : "Under these stars"}
+        </p>
+        <p style={{ textAlign: "center", color: C.muted, fontSize: 12.5, letterSpacing: ".08em" }}>
+          {data.eventDate ? fmtDate(data.eventDate).toUpperCase() : "THE NIGHT IT BEGAN"}
+        </p>
+      </div>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
+        The exact night sky over your moment, printed and framed. We print and ship it to you.
+      </p>
+    </div>
+  );
+}
+
+/* ─────────────────  THE MUG (print)  ───────────────── */
+function Mug({ data }: { data: Data }) {
+  const reasons = (data.reason || "you make every ordinary day feel like a holiday")
+    .split(/[.,\n]/).map((s) => s.trim()).filter(Boolean).slice(0, 3);
+  return (
+    <div className="orx-rise">
+      <div style={{ display: "grid", placeItems: "center", padding: "26px 18px", borderRadius: 14, background: "linear-gradient(145deg,#241C32,#16111F)", border: `1px solid ${C.line}` }}>
+        <div style={{ position: "relative", width: 200, height: 150 }}>
+          <div style={{ position: "absolute", right: 4, top: 30, width: 44, height: 60, border: "10px solid #F4ECDD", borderRadius: "0 40px 40px 0", background: "transparent" }} />
+          <div style={{ position: "absolute", left: 8, top: 14, width: 150, height: 120, borderRadius: 14, background: "linear-gradient(180deg,#FBF7EE,#EAE0CE)", boxShadow: "0 14px 30px rgba(0,0,0,.45)", padding: "16px 14px", textAlign: "center" }}>
+            <p style={{ fontFamily: display, fontSize: 13, color: "#9A6A4A", letterSpacing: ".12em", textTransform: "uppercase", margin: "0 0 8px" }}>Reasons I love you</p>
+            {reasons.map((r, i) => (
+              <p key={i} style={{ fontFamily: display, fontStyle: "italic", fontSize: 11.5, color: "#2A2230", margin: "4px 0", lineHeight: 1.3 }}>{i + 1}. {lc(r)}</p>
+            ))}
+          </div>
+        </div>
+      </div>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
+        Your words on a ceramic mug they&apos;ll hold every morning. We print and ship it to you.
+      </p>
+    </div>
+  );
+}
+
+/* ─────────────────  THE CARD (print)  ───────────────── */
+function Card({ data, poem }: { data: Data; poem: string[] }) {
+  return (
+    <div className="orx-rise">
+      <div style={{ borderRadius: 12, overflow: "hidden", border: `1px solid ${C.line}`, boxShadow: "0 18px 40px rgba(0,0,0,.5)" }}>
+        <div style={{ padding: "30px 26px", background: "linear-gradient(160deg,#FBF7EE,#F1E7D6)", textAlign: "center", minHeight: 300 }}>
+          <Flame size={22} />
+          <p style={{ fontFamily: display, fontSize: 13, letterSpacing: ".2em", textTransform: "uppercase", color: "#9A6A4A", margin: "10px 0 18px" }}>For {cap(data.pet || data.name || "You")}</p>
+          {poem.slice(1, 6).map((l, i) => l === ""
+            ? <div key={i} style={{ height: 8 }} />
+            : <p key={i} style={{ fontFamily: display, fontStyle: "italic", fontSize: 15.5, color: "#2A2230", margin: "4px 0", lineHeight: 1.5 }}>{l}</p>)}
+          <div style={{ marginTop: 20, color: "#8A7E6E", fontSize: 11, letterSpacing: ".1em" }}>— {(data.name || "Me").toUpperCase()}</div>
+        </div>
+      </div>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
+        A premium folded card, printed with your words and mailed for you.
+      </p>
+    </div>
+  );
+}
+
+/* ─────────────────  GIFT CARD / EXPERIENCE (commerce voucher)  ───────────────── */
+function Voucher({ data, gift }: { data: Data; gift: ReturnType<typeof giftByKey> }) {
+  const amount = (gift.priceCents / 100).toFixed(0);
+  const Icon = gift.key === "experience" ? Ticket : GiftIcon;
+  return (
+    <div className="orx-rise">
+      <div style={{ borderRadius: 18, padding: 22, background: "linear-gradient(145deg,#2C2140,#171024)", border: `1px solid ${C.gold}`, boxShadow: "0 18px 40px rgba(0,0,0,.5)", color: C.ivory, minHeight: 220, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ color: C.gold }}><Icon size={26} /></span>
+          <span style={{ fontFamily: display, fontSize: 30, color: C.gold }}>${amount}</span>
+        </div>
+        <div>
+          <p style={{ fontFamily: display, fontSize: 22, margin: "0 0 4px" }}>{gift.label}</p>
+          <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>{gift.desc}</p>
+        </div>
+        <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 12, display: "flex", justifyContent: "space-between", fontSize: 11.5, letterSpacing: ".08em", color: C.muted }}>
+          <span>FOR {cap(data.pet || data.name || "YOU").toUpperCase()}</span>
+          <span>OCCASION RESCUE</span>
+        </div>
+      </div>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
+        Delivered to their inbox the moment you order — redeemable instantly.
       </p>
     </div>
   );

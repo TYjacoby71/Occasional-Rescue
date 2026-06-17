@@ -2,9 +2,12 @@ import type { NextRequest } from "next/server";
 import Stripe from "stripe";
 import { createServiceClient } from "@/lib/supabase/service";
 import { isStripeConfigured, isSupabaseConfigured } from "@/lib/config";
+import { getProduct } from "@/lib/modules/catalog";
+import { submitToSupplier, type ShippingDetails } from "@/lib/modules/fulfillment";
 import type { Database, Json } from "@/lib/database.types";
 
 type DeliverableKind = Database["public"]["Enums"]["deliverable_kind"];
+type PaymentType = Database["public"]["Enums"]["payment_type"];
 
 export const runtime = "nodejs";
 
@@ -41,7 +44,9 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (event.type === "checkout.session.completed") {
       const s = event.data.object as Stripe.Checkout.Session;
       const orderId = s.metadata?.order_id;
-      const isPrint = s.metadata?.purchase === "print";
+      // 'print' (shippable keepsake) and 'commerce' (gift card / experience) are both single-item
+      // catalog orders that get handed to a supplier; 'digital' is the bundle paywall.
+      const isItemOrder = s.metadata?.purchase === "print" || s.metadata?.purchase === "commerce";
       const intentId = typeof s.payment_intent === "string" ? s.payment_intent : null;
       if (orderId) {
         await supabase
@@ -53,25 +58,38 @@ export async function POST(req: NextRequest): Promise<Response> {
           })
           .eq("id", orderId);
 
-        if (isPrint) {
-          // A shippable keepsake: capture the address Stripe collected so we can fulfill it,
-          // and record the print deliverable against the order.
-          const shipping = (s.collected_information?.shipping_details ?? null) as unknown as Record<string, unknown> | null;
-          const kind = (s.metadata?.kind ?? "photobook") as DeliverableKind;
+        if (isItemOrder) {
+          // Resolve the SKU from the catalog (source of truth for kind + supplier), capture the
+          // shipping address Stripe collected, and hand the order to the supplier (Prodigi when
+          // configured; otherwise recorded for concierge fulfillment).
+          const product = s.metadata?.slug ? await getProduct(s.metadata.slug) : null;
+          const kind: DeliverableKind = product?.deliverable_kind ?? "physical";
+          const shipping = (s.collected_information?.shipping_details ?? null) as ShippingDetails;
+          const customerEmail = s.customer_details?.email ?? null;
+          const assetUrls = await orderAssetUrls(supabase, orderId);
+
+          const fulfillment = product
+            ? await submitToSupplier({ product, orderId, shipping, recipientEmail: customerEmail, assetUrls })
+            : { status: "concierge" as const, supplier: null, supplierOrderId: null, detail: "no product" };
+
           await supabase.from("deliverables").insert({
             order_id: orderId,
             kind,
             status: "paid",
             payload: {
-              fulfillment: "print",
-              fulfillment_status: "ordered",
+              fulfillment: product?.fulfillment ?? "print",
+              product_slug: product?.slug ?? s.metadata?.slug ?? null,
+              supplier: fulfillment.supplier,
+              fulfillment_status: fulfillment.status,
+              supplier_order_id: fulfillment.supplierOrderId,
+              fulfillment_detail: fulfillment.detail ?? null,
               shipping,
-              customer_email: s.customer_details?.email ?? null,
+              customer_email: customerEmail,
             } as Json,
           });
           await supabase.from("payments").insert({
             order_id: orderId,
-            type: kind === "photobook" ? "photobook" : "order",
+            type: (kind === "photobook" ? "photobook" : "order") as PaymentType,
             amount_cents: s.amount_total ?? 0,
             status: "succeeded",
             stripe_payment_intent_id: intentId,
@@ -90,4 +108,21 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   return new Response("ok", { status: 200 });
+}
+
+// Long-lived signed URLs for an order's photos, so a print supplier can fetch the artwork. The
+// `assets` bucket is private; 7 days is ample for a POD job to pull files.
+async function orderAssetUrls(
+  supabase: ReturnType<typeof createServiceClient>,
+  orderId: string,
+): Promise<string[]> {
+  const { data: rows } = await supabase
+    .from("assets")
+    .select("storage_path")
+    .eq("order_id", orderId)
+    .order("position");
+  const paths = (rows ?? []).map((r) => r.storage_path).filter(Boolean);
+  if (!paths.length) return [];
+  const { data: signed } = await supabase.storage.from("assets").createSignedUrls(paths, 60 * 60 * 24 * 7);
+  return (signed ?? []).map((s) => s.signedUrl).filter((u): u is string => Boolean(u));
 }
